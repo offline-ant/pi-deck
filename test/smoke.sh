@@ -43,6 +43,9 @@ cat > "$TMP/init.el" <<EOI
                           "--no-context-files" "-e" "$DECK_DIR/test/support/faux.ts"
                           "-e" "$ORCHESTRATION_DIR/.."
                           "--provider" "pi-deck-faux" "--model" "one")
+      ;; The configured look: Pi-style chats and draft-fitted inputs.
+      pilish-chat-style 'pi
+      pilish-input-window-height 'fit
       pi-deck-state-file "$TMP/state.eld"
       pi-deck-preferences-file "$TMP/preferences.eld"
       pi-deck-restart-command '("$EMACS" "-Q" "--daemon=%s" "-l" "$TMP/init.el"))

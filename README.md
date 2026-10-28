@@ -182,9 +182,12 @@ resume from disk. Reattach clients afterwards.
 
 ## Notable options
 
+Input windows below chats are sized by Pilish (`pilish-input-window-height`;
+`fit` grows with the draft like Pi's editor).
+
 `pi-deck-new-space-action` (agent/shell/dired), `pi-deck-reveal-action`
 (how hidden agents such as workers are shown: split/window/tab),
-`pi-deck-input-height`, `pi-deck-include-shells`, `pi-deck-notify-on`,
+`pi-deck-include-shells`, `pi-deck-notify-on`,
 `pi-deck-notify-shells`, `pi-deck-notify-bell`, `pi-deck-summary-statuses`,
 `pi-deck-layouts` (add your own presets), `pi-deck-grid-include-shells`,
 `pi-deck-sidebar`, `pi-deck-sidebar-side`, `pi-deck-sidebar-width`,

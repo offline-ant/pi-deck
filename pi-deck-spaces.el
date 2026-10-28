@@ -38,11 +38,6 @@ selected window, and `tab' opens a new tab in its space."
   :type '(choice (const split) (const window) (const tab))
   :group 'pi-deck)
 
-(defcustom pi-deck-input-height 8
-  "Height in lines of a Pilish input window below its chat."
-  :type 'natnum
-  :group 'pi-deck)
-
 (defcustom pi-deck-shell-program nil
   "Program for new shell panes; nil means ghostel's default shell.
 That is `ghostel-shell' with ghostel's shell integration (OSC 133 prompt
@@ -452,11 +447,10 @@ With prefix argument STOP-AGENTS, also stop the space's agents."
     (set-window-buffer window buffer)
     (when (eq (pi-deck-agent-kind agent) 'pi)
       (let ((input (pilish-session-input-buffer buffer)))
-        (when (and (buffer-live-p input) (not (get-buffer-window input))
-                   (> (window-height window) (* 2 pi-deck-input-height)))
-          (let ((input-window (split-window window (- pi-deck-input-height) 'below)))
-            (set-window-buffer input-window input)
-            ;; Resizing the pane (splits, balancing) keeps the input's height.
+        (when (and (buffer-live-p input) (not (get-buffer-window input)))
+          ;; Pilish sizes the input (`pilish-input-window-height', e.g. `fit'
+          ;; to the draft); resizing the pane (splits, balancing) keeps it.
+          (when-let* ((input-window (pilish-split-input-window window input)))
             (window-preserve-size input-window nil t))
           (with-selected-window window (goto-char (point-max))))))
     window))
