@@ -1,0 +1,4 @@
+*.elc
+.cache/
+.deps-stamp
+/tmp/
