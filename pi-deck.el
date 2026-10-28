@@ -57,6 +57,7 @@ wherever you are typing."
 (defvar pi-deck--refresh-timer nil "Reconciliation timer.")
 (defvar pi-deck--age-ticks 0 "Reconciliations since the overview ages were redrawn.")
 (defvar pi-deck--previous-dialog-style nil "Pilish dialog style before the mode.")
+(defvar pi-deck--previous-pairing nil "Whether `pilish-window-pairing-mode' was on before the mode.")
 
 (defvar-keymap pi-deck-command-map
   :doc "pi-deck commands; bind to a prefix such as \"C-c d\"."
@@ -85,6 +86,7 @@ wherever you are typing."
   "-" #'pi-deck-split-below
   "z" #'pi-deck-zoom
   "x" #'pi-deck-close-pane
+  "=" #'pi-deck-repair-tab
   "l" #'pi-deck-apply-layout
   "m" #'pi-deck-menu
   "?" #'pi-deck-menu)
@@ -142,7 +144,10 @@ wherever you are typing."
   (if pi-deck-mode
       (progn
         (setq pi-deck--previous-dialog-style pilish-extension-dialog-style
-              pilish-extension-dialog-style pi-deck-dialog-style)
+              pilish-extension-dialog-style pi-deck-dialog-style
+              pi-deck--previous-pairing pilish-window-pairing-mode)
+        ;; Panes rely on Pilish keeping each chat over its input.
+        (pilish-window-pairing-mode 1)
         (pi-deck-load-preferences)
         (pi-deck-tab-bar-enable)
         (pi-deck-refresh)
@@ -154,6 +159,7 @@ wherever you are typing."
           (with-selected-frame frame (pi-deck--sidebar-sync))))
     (when pi-deck--save-timer (pi-deck--save-now))
     (setq pilish-extension-dialog-style pi-deck--previous-dialog-style)
+    (unless pi-deck--previous-pairing (pilish-window-pairing-mode -1))
     (pi-deck-tab-bar-disable)))
 
 (provide 'pi-deck)

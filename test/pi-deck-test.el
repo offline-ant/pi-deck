@@ -334,6 +334,49 @@
           (pi-deck-zoom)
           (should (= (length (window-list nil 'no-minibuf)) 3)))))))
 
+(ert-deftest pi-deck-test-two-agents-side-by-side-stay-paired ()
+  (pi-deck-test--with-deck
+    (pi-deck-create-space dir "space")
+    (cl-letf (((symbol-function 'pilish-start-session)
+               (lambda (directory name &rest _) (pi-deck-test--session directory name))))
+      (let* ((a (pi-deck-new-agent "a"))
+             (_ (pi-deck-split-right))
+             (b (pi-deck-new-agent "b"))
+             (chat-a (pi-deck-agent-buffer a))
+             (chat-b (pi-deck-agent-buffer b)))
+        (should (pilish-window-pair (get-buffer-window chat-a)))
+        (should (pilish-window-pair (get-buffer-window chat-b)))
+        (should-not (eq (window-parent (get-buffer-window chat-a))
+                        (window-parent (get-buffer-window chat-b))))
+        ;; A shell takes the place of the whole pair it is opened in.
+        (select-window (get-buffer-window (pilish-session-input-buffer chat-b)))
+        (pi-deck-new-shell)
+        (should-not (get-buffer-window chat-b))
+        (should-not (get-buffer-window (pilish-session-input-buffer chat-b)))
+        (should (pilish-window-pair (get-buffer-window chat-a)))
+        ;; Closing a pane closes the chat with its input.
+        (select-window (get-buffer-window chat-a))
+        (pi-deck-close-pane)
+        (should-not (get-buffer-window chat-a))
+        (should-not (get-buffer-window (pilish-session-input-buffer chat-a)))))))
+
+(ert-deftest pi-deck-test-repair-tab-rebuilds-pairs ()
+  (pi-deck-test--with-deck
+    (pi-deck-create-space dir "space")
+    (let* ((chat (pi-deck-test--session dir "a"))
+           (input (pilish-session-input-buffer chat)))
+      (pi-deck--display-agent-in-window (pi-deck-agent chat) (selected-window))
+      (pilish-delete-input-window (get-buffer-window input))
+      (should-not (get-buffer-window input))
+      (pi-deck-repair-tab)
+      (should (eq (cdr (pilish-window-pair (get-buffer-window chat)))
+                  (get-buffer-window input)))
+      ;; An input shown alone gets its chat back above it.
+      (pi-deck--single-window)
+      (switch-to-buffer input)
+      (pi-deck-repair-tab)
+      (should (eq (car (pilish-window-pair (selected-window))) (get-buffer-window chat))))))
+
 (ert-deftest pi-deck-test-reveal-hidden-worker-splits-its-space ()
   (pi-deck-test--with-deck
     (pi-deck-create-space dir "space")
@@ -465,13 +508,18 @@
     (pi-deck-create-space dir "space")
     (let ((agents (mapcar (lambda (name) (pi-deck-test--session dir name)) '("a" "b" "c"))))
       (pi-deck-apply-layout "grid")
-      (should (= (length (window-list nil 'no-minibuf)) 3))
-      (should (cl-every (lambda (chat) (get-buffer-window chat)) agents))
+      ;; Each agent's cell is its chat over its input.
+      (should (= (length (window-list nil 'no-minibuf)) 6))
+      (should (cl-every (lambda (chat)
+                          (equal (pilish-window-pair (get-buffer-window chat))
+                                 (cons (get-buffer-window chat)
+                                       (get-buffer-window (pilish-session-input-buffer chat)))))
+                        agents))
       (setf (pi-deck-agent-parent (pi-deck-agent (nth 1 agents))) (nth 0 agents)
             (pi-deck-agent-parent (pi-deck-agent (nth 2 agents))) (nth 0 agents))
       (select-window (get-buffer-window (nth 0 agents)))
       (pi-deck-apply-layout "workers")
-      (should (= (length (window-list nil 'no-minibuf)) 4)) ; chat, input, 2 workers
+      (should (= (length (window-list nil 'no-minibuf)) 6)) ; three chat and input pairs
       (pi-deck-apply-layout "single")
       (should (= (length (window-list nil 'no-minibuf)) 2)))))
 

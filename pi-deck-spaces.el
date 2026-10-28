@@ -198,15 +198,14 @@ tab next to existing members or to the end."
 (defun pi-deck--new-tab-in-space (space &optional name)
   "Create and select a new tab in SPACE, placed after its last tab.
 NAME, when non-nil, becomes the tab's explicit name."
-  (when (window-parameter nil 'window-side)
-    (select-window (get-mru-window nil nil t)))
+  (pi-deck--select-ordinary-window)
   (let* ((entries (pi-deck--space-tab-entries space))
          (position (if entries (cadr (car (last entries))) (length (pi-deck--tabs)))))
     (let ((tab-bar-new-tab-group nil))
       (tab-bar-new-tab-to (1+ position)))
     (pi-deck--set-tab-group space)
     (when name (tab-bar-rename-tab name))
-    (delete-other-windows)))
+    (pi-deck--single-window)))
 
 (defun pi-deck-select-space (space)
   "Select SPACE's most recently used tab, creating one when none exists."
@@ -442,47 +441,33 @@ With prefix argument STOP-AGENTS, also stop the space's agents."
 ;;;; Panes
 
 (defun pi-deck--display-agent-in-window (agent window)
-  "Show AGENT in WINDOW: a chat with its input window below, or a terminal."
-  (let ((buffer (pi-deck-agent-buffer agent)))
-    (set-window-buffer window buffer)
-    (when (eq (pi-deck-agent-kind agent) 'pi)
-      (let ((input (pilish-session-input-buffer buffer)))
-        (when (and (buffer-live-p input) (not (get-buffer-window input)))
-          ;; Pilish sizes the input (`pilish-input-window-height', e.g. `fit'
-          ;; to the draft); resizing the pane (splits, balancing) keeps it.
-          (when-let* ((input-window (pilish-split-input-window window input)))
-            (window-preserve-size input-window nil t))
-          (with-selected-window window (goto-char (point-max))))))
+  "Show AGENT in WINDOW and return the window now showing its buffer.
+A Pi agent's chat gets its input window below it as one Pilish pair (see
+`pilish-window-pair'); when WINDOW is half of a pair, the pair switches
+to AGENT.  A terminal takes the place of WINDOW's whole pair."
+  (let ((buffer (pi-deck-agent-buffer agent))
+        (pair (pilish-window-pair window)))
+    (when pair (setq window (car pair)))
+    (if (eq (pi-deck-agent-kind agent) 'pi)
+        (let ((input (pilish-session-input-buffer buffer)))
+          (set-window-buffer window buffer)
+          (when (buffer-live-p input)
+            (pilish-split-input-window window input))
+          (with-selected-window window (goto-char (point-max))))
+      (set-window-buffer (pilish-dissolve-window-pair window) buffer))
     window))
 
 (defun pi-deck--pane-window ()
-  "Return the selected pane's window, freed of a chat's input window.
-When the selected window belongs to a Pilish session, its input window is
-deleted and the chat window returned, so the whole pane can be reused."
-  (let* ((window (selected-window))
-         (chat (pilish-session-chat-buffer (window-buffer window))))
-    (if (not chat)
-        window
-      (let ((chat-window (get-buffer-window chat))
-            (input-window (get-buffer-window (pilish-session-input-buffer chat))))
-        (when (and input-window chat-window (not (eq input-window chat-window)))
-          (delete-window input-window))
-        (select-window (or chat-window (selected-window)))))))
+  "Return the selected pane's window: a pair's chat window, else the selected one."
+  (car (or (pilish-window-pair (selected-window)) (list (selected-window)))))
 
 (defun pi-deck--pane-of (window)
   "Return the window holding WINDOW's whole pane.
-A Pilish chat window and its input window stacked together form one pane,
-held by their parent window; any other WINDOW is its own pane."
-  (let* ((chat (pilish-session-chat-buffer (window-buffer window)))
-         (chat-window (and chat (get-buffer-window chat)))
-         (input-window (and chat (get-buffer-window (pilish-session-input-buffer chat))))
-         (parent (and chat-window input-window (window-parent chat-window))))
-    (if (and parent
-             (memq window (list chat-window input-window))
-             (eq parent (window-parent input-window))
-             (= (window-child-count parent) 2))
-        parent
-      window)))
+A Pilish chat and input pair is one pane, held by its parent window; any
+other WINDOW is its own pane."
+  (if-let* ((pair (pilish-window-pair window)))
+      (window-parent (car pair))
+    window))
 
 (defun pi-deck--split-pane (window direction)
   "Split the pane holding WINDOW in DIRECTION (`right' or `below') in half.
@@ -604,11 +589,10 @@ With SPLIT (prefix argument), show it in a new window to the right."
          (buffer (pi-deck-start-shell (pi-deck--current-space-dir)
                                       (format "shell:%s" (or space "shell"))))
          (agent (pi-deck--track buffer 'shell))
-         (window (if split (split-window (pi-deck--pane-window) nil 'right)
-                   (pi-deck--pane-window))))
+         (window (if split (split-window (pi-deck--pane-of (selected-window)) nil 'right)
+                   (selected-window))))
     (setf (pi-deck-agent-assigned-space agent) space)
-    (set-window-buffer window buffer)
-    (select-window window)
+    (select-window (pi-deck--display-agent-in-window agent window))
     agent))
 
 (defun pi-deck-split-right ()
@@ -633,15 +617,24 @@ With SPLIT (prefix argument), show it in a new window to the right."
       (delete-other-windows (pi-deck--pane-of (selected-window))))))
 
 (defun pi-deck-close-pane ()
-  "Close the selected pane; a chat pane also closes its input window."
+  "Close the selected pane; a chat closes together with its input window.
+The tab's only pane shows its previous buffer instead."
   (interactive)
-  (let* ((chat (pilish-session-chat-buffer (window-buffer)))
-         (windows (if chat
-                      (append (get-buffer-window-list chat nil)
-                              (get-buffer-window-list (pilish-session-input-buffer chat) nil))
-                    (list (selected-window)))))
-    (dolist (window windows)
-      (if (one-window-p) (switch-to-prev-buffer window) (delete-window window)))))
+  (if (eq (pi-deck--pane-of (selected-window)) (window-main-window))
+      (let ((window (pilish-dissolve-window-pair (selected-window))))
+        (select-window window)
+        (switch-to-prev-buffer window))
+    (delete-window (selected-window))))
+
+(defun pi-deck-repair-tab ()
+  "Rebuild the current tab's agent panes.
+Every window showing a Pi agent's chat or input becomes that agent's chat
+over its input again, including inputs that were closed."
+  (interactive)
+  (pi-deck--select-ordinary-window)
+  (pilish-repair-window-pairs nil t)
+  (pi-deck-mark-visible-seen)
+  (message "pi-deck: panes repaired"))
 
 (defun pi-deck-stop-agent (agent)
   "Stop AGENT and kill its buffers without confirmation."

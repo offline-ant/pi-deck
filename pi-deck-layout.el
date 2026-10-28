@@ -46,12 +46,17 @@ That is the selected window's agent, else the space's first Pi agent."
       (car (pi-deck--layout-space-agents 'pi))
       (user-error "No Pi agent in this space")))
 
+(defun pi-deck--layout-focus (agent)
+  "Select AGENT's input window, else its buffer's window."
+  (when-let* ((window (pi-deck--input-or-chat-window agent)))
+    (select-window window)))
+
 (defun pi-deck-layout-single ()
   "Show only the primary agent with its input."
   (let ((agent (pi-deck--layout-primary)))
-    (delete-other-windows)
+    (pi-deck--single-window)
     (pi-deck--display-agent-in-window agent (selected-window))
-    (select-window (pi-deck--input-or-chat-window agent))))
+    (pi-deck--layout-focus agent)))
 
 (defun pi-deck-layout-chat-shell ()
   "Show the primary Pi agent on the left and a shell of the space on the right."
@@ -61,16 +66,17 @@ That is the selected window's agent, else the space's first Pi agent."
                         (user-error "No Pi agent in this space")))))
          (shell (or (car (pi-deck--layout-space-agents 'shell))
                     (save-window-excursion (pi-deck-new-shell)))))
-    (delete-other-windows)
+    (pi-deck--single-window)
     (let ((right (split-window-right)))
-      (set-window-buffer right (pi-deck-agent-buffer shell))
+      (pi-deck--display-agent-in-window shell right)
       (pi-deck--display-agent-in-window agent (selected-window))
-      (select-window (pi-deck--input-or-chat-window agent)))))
+      (pi-deck--layout-focus agent))))
 
-(defun pi-deck--grid (buffers)
-  "Show BUFFERS in a balanced grid filling the current tab."
-  (delete-other-windows)
-  (let* ((count (length buffers))
+(defun pi-deck--grid (agents)
+  "Show AGENTS in a balanced grid filling the current tab.
+Each Pi agent's cell holds its chat over its input."
+  (pi-deck--single-window)
+  (let* ((count (length agents))
          (columns (max 1 (ceiling (sqrt count))))
          (rows (max 1 (ceiling count (float columns))))
          (column-windows (list (selected-window))))
@@ -85,14 +91,15 @@ That is the selected window's agent, else the space's first Pi agent."
           (setq windows (append windows (nreverse cells)))))
       (balance-windows)
       (cl-loop for window in windows
-               for buffer = (pop buffers)
-               do (if buffer (set-window-buffer window buffer) (delete-window window))))))
+               for agent = (pop agents)
+               do (if agent (pi-deck--display-agent-in-window agent window)
+                    (delete-window window))))))
 
 (defun pi-deck-layout-grid ()
-  "Show all of the space's agents (chats only) in a grid."
+  "Show all of the space's agents in a grid, Pi agents with their inputs."
   (let ((agents (pi-deck--layout-space-agents (unless pi-deck-grid-include-shells 'pi))))
     (unless agents (user-error "No agents in this space"))
-    (pi-deck--grid (mapcar #'pi-deck-agent-buffer agents))))
+    (pi-deck--grid agents)))
 
 (defun pi-deck-layout-workers ()
   "Show the primary agent on the left and its workers stacked on the right."
@@ -100,16 +107,15 @@ That is the selected window's agent, else the space's first Pi agent."
          (workers (cl-remove-if-not
                    (lambda (other) (eq (pi-deck-agent-parent other) (pi-deck-agent-buffer agent)))
                    (pi-deck-agents))))
-    (delete-other-windows)
+    (pi-deck--single-window)
     (when workers
-      (let ((window (split-window-right)))
-        (set-window-buffer window (pi-deck-agent-buffer (car workers)))
-        (dolist (worker (cdr workers))
-          (setq window (split-window window nil 'below))
-          (set-window-buffer window (pi-deck-agent-buffer worker)))
-        (balance-windows (window-parent window))))
+      (let* ((column (list (split-window-right))))
+        (dolist (_ (cdr workers))
+          (push (split-window (car column) nil 'below) column))
+        (balance-windows (window-parent (car column)))
+        (cl-mapc #'pi-deck--display-agent-in-window workers (nreverse column))))
     (pi-deck--display-agent-in-window agent (selected-window))
-    (select-window (pi-deck--input-or-chat-window agent))))
+    (pi-deck--layout-focus agent)))
 
 ;;;###autoload
 (defun pi-deck-apply-layout (name)

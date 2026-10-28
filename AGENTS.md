@@ -41,8 +41,13 @@ Dependency order: core → spaces → workers → overview → goto/notify/tabba
 - Evil: the overview's keys live in its normal-state auxiliary map (built
   from `pi-deck-overview-mode-map`), which beats evil-collection's
   `special-mode` bindings; refresh is `gr` there so the `g` prefix survives.
-- A chat window plus its input window is one pane (`pi-deck--pane-of`);
-  split and zoom panes, never their halves.
+- A chat window plus its input window is one Pilish pair (`pilish-window-pair`)
+  and one pane (`pi-deck--pane-of`). Pane code uses Pilish's pair API
+  (`pilish-split-input-window`, `pilish-dissolve-window-pair`,
+  `pilish-repair-window-pairs`) and never pairs windows itself; split and zoom
+  panes, never their halves. `pi-deck-mode` turns on `pilish-window-pairing-mode`.
+- Select a non-side window (`pi-deck--select-ordinary-window`) before
+  `delete-other-windows`; `pi-deck--single-window` reduces a tab to one plain window.
 - Only root and space tabs are saved or mirrored; tabs outside spaces stay
   frame-local.
 - State saves are event-driven (`pi-deck-schedule-save`): never add
@@ -65,12 +70,12 @@ make smoke    # real Pi/faux in a disposable daemon, including restart
 
 - Tabs are per frame: a new frame copies the deck, but later tab edits do not sync
   between open frames.
-- A new GUI frame can start with only one copied space tab (no root tab, no chat
-  window); `delete-other-windows` there fails on the side window.
 - Tabs created while the daemon has no client frame stay on its initial frame and do
   not reach the next client (`pi-deck--last-tabs` updates only with a client frame).
 - A tab's automatic name follows its selected window, so opening a panel from the
   sidebar renames the agent's tab.
-- Jumping to an agent shown only by its input window does not re-show its chat.
+- Evil's `SPC w r` (`evil-window-rotate-downwards`) with the sidebar open can leave
+  two pairs showing the same session (Evil's side-window save/restore fails to put
+  chat states into input-sized windows); the pairs stay consistent.
 - Terminal status hooks `ghostel--osc133-marker` (ghostel internal); ghostel upgrades
   can break it.

@@ -250,8 +250,10 @@ A lone unused initial tab is replaced."
               (condition-case nil
                   (window-state-put ws (frame-root-window) 'safe)
                 (error (delete-other-windows)))
-              (when (window-parameter (selected-window) 'window-side)
-                (select-window (or (get-mru-window nil nil t) (window-main-window)))))
+              (pi-deck--select-ordinary-window)
+              ;; Window states keep no atoms: make the chat and input
+              ;; pairs atomic before the tab is stored.
+              (pilish-repair-window-pairs))
             (when (plist-get tab :current)
               (setq selected (1+ (tab-bar--current-tab-index)))))))
       ;; LONE (a tab number) was the frame's unused initial tab; new

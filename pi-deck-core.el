@@ -372,6 +372,21 @@ Leaving work (working or blocked to idle) while invisible makes it done."
   (when (buffer-live-p chat-buffer)
     (pi-deck-refresh-agent chat-buffer)))
 
+(defun pi-deck--select-ordinary-window ()
+  "Select a window that is no side window when the selected one is.
+`delete-other-windows' and new tabs fail in side windows (the sidebar)."
+  (when (window-parameter nil 'window-side)
+    (when-let* ((window (cl-find-if-not (lambda (window) (window-parameter window 'window-side))
+                                        (window-list nil 'no-mini))))
+      (select-window window))))
+
+(defun pi-deck--single-window ()
+  "Reduce the tab to one plain window besides side windows and select it.
+A Pilish chat and input pair becomes its chat window alone."
+  (pi-deck--select-ordinary-window)
+  (select-window (pilish-dissolve-window-pair (selected-window)))
+  (delete-other-windows))
+
 (defun pi-deck-summary (&optional agents)
   "Return an alist of (STATUS . COUNT) over AGENTS (default all), urgent first."
   (let ((agents (or agents (pi-deck-agents))))

@@ -50,6 +50,7 @@
     ("-" "split below" pi-deck-split-below)
     ("z" "zoom" pi-deck-zoom)
     ("x" "close pane" pi-deck-close-pane)
+    ("=" "repair panes" pi-deck-repair-tab)
     ("l" "layout preset" pi-deck-apply-layout)]]
   [["Tab bar"
     ("G" (lambda () (pi-deck-menu--toggle-description "groups" 'pi-deck-tab-bar-groups))

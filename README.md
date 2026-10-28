@@ -11,7 +11,7 @@ notifications, and a root tab that controls the Emacs daemon. Built on Emacs
 |---|---|
 | workspace | **space**: a `tab-bar` tab group with a project directory and Git branch |
 | tab | **tab** in a space: a window layout |
-| pane | window showing a Pilish chat (with its input below) or a ghostel terminal |
+| pane | a Pilish chat with its input below (one atomic window pair) or a ghostel terminal |
 | agent | Pilish session (root or orchestration worker) or ghostel terminal |
 | sidebar / goto picker | `pi-deck-sidebar-toggle` / `pi-deck-goto` |
 | server + clients | the Emacs daemon; every `emacsclient` frame gets the deck's tabs |
@@ -92,6 +92,7 @@ client frame gets the tabs of an existing frame, or of the last closed one.
 | `\|` / `-` | split pane right / below |
 | `z` | zoom pane (toggle) |
 | `x` | close pane (a chat pane takes its input window along) |
+| `=` | repair the tab's panes: every chat over its input again, closed inputs reopened |
 | `l` | layout preset: `single`, `chat+shell`, `grid` (all agents), `workers` |
 | `m` / `?` | transient menu (also tab bar toggles, state and daemon) |
 
@@ -182,8 +183,13 @@ resume from disk. Reattach clients afterwards.
 
 ## Notable options
 
-Input windows below chats are sized by Pilish (`pilish-input-window-height`;
-`fit` grows with the draft like Pi's editor).
+Each chat and the input window below it form one pane through Pilish's
+`pilish-window-pairing-mode`, which `pi-deck-mode` turns on: ordinary
+window commands (`C-x 0`, `C-x 1`, splits, `switch-to-buffer`, Evil's
+window moves, `winner-undo`) keep chat and input together, and several
+agents can sit side by side in one tab, each with its own input.  Pilish
+sizes the inputs (`pilish-input-window-height`; `fit` grows with the draft
+like Pi's editor).
 
 `pi-deck-new-space-action` (agent/shell/dired), `pi-deck-reveal-action`
 (how hidden agents such as workers are shown: split/window/tab),

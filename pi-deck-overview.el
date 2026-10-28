@@ -512,7 +512,7 @@
         (tab-bar-new-tab-to 1)
         (pi-deck--set-tab-group pi-deck-root-name)
         (tab-bar-rename-tab "overview")
-        (delete-other-windows)
+        (pi-deck--single-window)
         (switch-to-buffer (pi-deck-overview-buffer))
         (pi-deck--sidebar-sync)
         (tab-bar-select-tab (1+ current))))))
@@ -524,7 +524,7 @@
   (pi-deck--select-tab-index
    (1+ (cl-position-if #'pi-deck-root-tab-p (pi-deck--tabs))))
   (unless (get-buffer-window (pi-deck-overview-buffer))
-    (delete-other-windows)
+    (pi-deck--single-window)
     (switch-to-buffer (pi-deck-overview-buffer)))
   (select-window (get-buffer-window (pi-deck-overview-buffer)))
   (pi-deck-overview-refresh (pi-deck-overview-buffer)))
