@@ -34,8 +34,10 @@ A daemon restarted by `pi-deck-restart-daemon' restores regardless."
   :type 'boolean
   :group 'pi-deck)
 
-(defcustom pi-deck-autosave-interval 60
-  "Seconds between automatic state saves, or nil to save only on exit."
+(defcustom pi-deck-save-delay 2
+  "Seconds after a change before the state is saved, or nil to save only on exit.
+Changes are space and tab edits, window layout changes, agents starting or
+closing, and agents finishing a turn.  Nothing is saved periodically."
   :type '(choice (const nil) number)
   :group 'pi-deck)
 
@@ -77,8 +79,7 @@ TAB-INDEX caches `pi-deck-tab-index'."
         ('shell
          (list :kind 'shell :buffer (buffer-name buffer)
                :dir (pi-deck-agent-directory agent)
-               :command (or (buffer-local-value 'pi-deck--shell-command buffer)
-                            (list (pi-deck-shell-program)))
+               :command (buffer-local-value 'pi-deck--shell-command buffer)
                :space space))))))
 
 (defun pi-deck-frame-tabs (&optional frame)
@@ -111,7 +112,6 @@ frame's initial tab, and restoring or mirroring them only adds clutter."
         (frame (pi-deck--state-frame)))
     (list :version 1
           :spaces pi-deck-spaces
-          :sidebar pi-deck--sidebar-visible
           ;; Without a client frame, keep the last known tabs: a terminal
           ;; that dies (closed SSH, killed multiplexer) deletes its frames
           ;; without `delete-frame-functions'.
@@ -121,18 +121,23 @@ frame's initial tab, and restoring or mirroring them only adds clutter."
           :agents (delq nil (mapcar (lambda (agent) (pi-deck--agent-record agent tab-index))
                                     (pi-deck-agents))))))
 
+(defvar pi-deck--last-saved nil
+  "Cons of the file and text last written by `pi-deck-save-state'.")
+
 ;;;###autoload
 (defun pi-deck-save-state (&optional file)
-  "Save spaces, tabs and sessions to FILE (default `pi-deck-state-file')."
+  "Save spaces, tabs and sessions to FILE (default `pi-deck-state-file').
+An unchanged state is not rewritten."
   (interactive)
-  (let ((file (or file pi-deck-state-file))
-        (state (pi-deck-state)))
-    (make-directory (file-name-directory file) t)
-    (with-temp-file file
-      (let ((print-length nil) (print-level nil) (print-circle nil))
-        (insert ";; pi-deck state -*- lisp-data -*-\n")
-        (prin1 state (current-buffer))
-        (insert "\n")))
+  (let* ((file (or file pi-deck-state-file))
+         (state (pi-deck-state))
+         (text (let ((print-length nil) (print-level nil) (print-circle nil))
+                 (concat ";; pi-deck state -*- lisp-data -*-\n" (prin1-to-string state) "\n"))))
+    (unless (and (equal pi-deck--last-saved (cons file text)) (file-exists-p file))
+      (make-directory (file-name-directory file) t)
+      (with-file-modes #o600
+        (write-region text nil file nil 'silent))
+      (setq pi-deck--last-saved (cons file text)))
     (when (called-interactively-p 'any)
       (message "Saved %d spaces and %d sessions to %s"
                (length (plist-get state :spaces)) (length (plist-get state :agents))
@@ -146,6 +151,42 @@ frame's initial tab, and restoring or mirroring them only adds clutter."
       (with-temp-buffer
         (insert-file-contents file)
         (read (current-buffer))))))
+
+;;;; Saving after changes
+
+(defvar pi-deck--save-timer nil
+  "Pending state save after a change.")
+
+(defun pi-deck-schedule-save (&rest _)
+  "Save the state `pi-deck-save-delay' seconds after the first unsaved change.
+Further changes before then join the same save, so one is never postponed
+indefinitely by a stream of changes."
+  (when (and pi-deck-save-delay (not pi-deck--save-timer))
+    (setq pi-deck--save-timer (run-with-timer pi-deck-save-delay nil #'pi-deck--save-now))))
+
+(defun pi-deck--save-now ()
+  "Save the state when there is anything to save."
+  (when pi-deck--save-timer
+    (cancel-timer pi-deck--save-timer)
+    (setq pi-deck--save-timer nil))
+  (when (or pi-deck-spaces (> (hash-table-count pi-deck--agents) 0))
+    (with-demoted-errors "pi-deck save: %S" (pi-deck-save-state))))
+
+(defun pi-deck--save-on-agent-change (_agent _old new)
+  "Schedule a save when an agent finishes a turn or exits (becomes NEW)."
+  (when (memq new '(idle unknown))
+    (pi-deck-schedule-save)))
+
+(defvar pi-deck--saved-structure nil
+  "Spaces and agent buffers when a save was last scheduled for them.")
+
+(defun pi-deck--save-on-structure-change ()
+  "Schedule a save when spaces or the set of agents changed."
+  (let ((structure (cons (copy-tree pi-deck-spaces)
+                         (mapcar #'pi-deck-agent-buffer (pi-deck-agents)))))
+    (unless (equal structure pi-deck--saved-structure)
+      (setq pi-deck--saved-structure structure)
+      (pi-deck-schedule-save))))
 
 ;;;; Restoring
 
@@ -233,11 +274,11 @@ frame, or to the next client frame when there is none."
       (unless (pi-deck-space (plist-get space :name))
         (pi-deck--register-space (plist-get space :name) (plist-get space :dir))))
     (let ((agents (delq nil (mapcar #'pi-deck--restore-agent (plist-get state :agents)))))
-      (setq pi-deck--sidebar-visible (plist-get state :sidebar))
       (let ((frame (pi-deck--state-frame)))
         (if frame
             (pi-deck-apply-tabs (plist-get state :tabs) frame)
           (setq pi-deck--pending-tabs (plist-get state :tabs))))
+      (pi-deck--sidebar-sync)
       (pi-deck--schedule-update)
       (message "pi-deck: restored %d spaces and %d sessions"
                (length (plist-get state :spaces)) (length agents))
@@ -269,7 +310,8 @@ frame, or to the next client frame when there is none."
           (pi-deck-apply-tabs (pi-deck-frame-tabs source) frame))
          ((and pi-deck-mirror-new-frames pi-deck--last-tabs)
           (pi-deck-apply-tabs pi-deck--last-tabs frame))
-         (t (pi-deck-root-ensure frame)))))))
+         (t (pi-deck-root-ensure frame)))
+        (with-selected-frame frame (pi-deck--sidebar-sync))))))
 
 (defun pi-deck-remember-frame (frame)
   "Keep closing FRAME's tabs for the next client frame."

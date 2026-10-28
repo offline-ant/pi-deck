@@ -15,11 +15,11 @@
 (require 'project)
 (require 'pi-deck-core)
 
-(declare-function eat-make "eat" (name program &optional startfile &rest switches))
+(declare-function ghostel-create "ghostel" (&optional name display identity))
+(declare-function ghostel-exec "ghostel" (buffer program &optional args identity))
 (declare-function pi-deck-root-ensure "pi-deck-overview" (&optional frame))
 (declare-function pi-deck-root-show "pi-deck-overview" ())
-(defvar eat-kill-buffer-on-exit)
-(defvar explicit-shell-file-name)
+(declare-function pi-deck--sidebar-sync "pi-deck-overview" (&rest _))
 
 (defcustom pi-deck-root-name "root"
   "Name of the pinned root space and its overview tab."
@@ -44,8 +44,10 @@ selected window, and `tab' opens a new tab in its space."
   :group 'pi-deck)
 
 (defcustom pi-deck-shell-program nil
-  "Program for new shell panes; nil means EAT's default shell.
-That is `explicit-shell-file-name', $ESHELL, or `shell-file-name'."
+  "Program for new shell panes; nil means ghostel's default shell.
+That is `ghostel-shell' with ghostel's shell integration (OSC 133 prompt
+marks for bash, zsh, fish and nushell).  An explicit program runs without
+that integration, so its status needs its own prompt marks."
   :type '(choice (const nil) string)
   :group 'pi-deck)
 
@@ -53,7 +55,10 @@ That is `explicit-shell-file-name', $ESHELL, or `shell-file-name'."
   "Registered spaces: plists with :name and :dir, in creation order.")
 
 (defvar-local pi-deck--shell-command nil
-  "Program and arguments a pi-deck shell pane was started with.")
+  "Program and arguments a pi-deck shell pane was started with.
+Nil means ghostel's default shell.")
+
+(defvar ghostel-kill-buffer-on-exit)
 
 ;;;; Registry
 
@@ -221,21 +226,26 @@ NAME, when non-nil, becomes the tab's explicit name."
                                :reverse t))))
         (pi-deck--select-tab-index (cadr recent))))))
 
-(defun pi-deck--read-space (prompt &optional exclude-root)
+(defun pi-deck--read-space (prompt &optional exclude-root extra)
   "Read a space name with PROMPT, showing status icons.
-EXCLUDE-ROOT omits the root space."
-  (let* ((names (cl-remove-if (lambda (name) (and exclude-root (equal name pi-deck-root-name)))
-                              (pi-deck-space-names)))
+EXCLUDE-ROOT omits the root space; EXTRA choices are offered after the
+spaces."
+  (let* ((names (append (cl-remove-if (lambda (name) (and exclude-root (equal name pi-deck-root-name)))
+                                      (pi-deck-space-names))
+                        extra))
          (statuses (pi-deck-space-statuses))
          (annotate (lambda (name)
-                     (concat " " (pi-deck-status-icon (or (cdr (assoc name statuses)) 'idle))
-                             (when-let* ((dir (pi-deck-space-dir name)))
-                               (concat " " (abbreviate-file-name dir)))))))
+                     (unless (member name extra)
+                       (concat " " (pi-deck-status-icon (or (cdr (assoc name statuses)) 'idle))
+                               (when-let* ((dir (pi-deck-space-dir name)))
+                                 (concat " " (abbreviate-file-name dir))))))))
     (completing-read prompt
                      (lambda (string pred action)
                        (if (eq action 'metadata)
                            `(metadata (category . pi-deck-space)
-                                      (annotation-function . ,annotate))
+                                      (annotation-function . ,annotate)
+                                      (display-sort-function . identity)
+                                      (cycle-sort-function . identity))
                          (complete-with-action action names string pred)))
                      nil t)))
 
@@ -285,6 +295,21 @@ TAB-INDEX caches `pi-deck-tab-index'."
        (one-window-p)
        (equal (buffer-name (window-buffer)) "*scratch*")))
 
+(defun pi-deck--make-space (dir &optional name)
+  "Register a space for DIR named NAME and select its new, empty tab.
+NAME defaults to DIR's base name; return the (unique) name used."
+  (let* ((dir (file-name-as-directory (expand-file-name dir)))
+         (name (pi-deck--unique-space-name
+                (or (and name (not (string-empty-p name)) name)
+                    (file-name-nondirectory (directory-file-name dir))))))
+    (unless (file-directory-p dir) (user-error "Not a directory: %s" dir))
+    (pi-deck--register-space name dir)
+    (if (pi-deck--unused-tab-p)
+        (pi-deck--set-tab-group name)
+      (pi-deck--new-tab-in-space name))
+    (pi-deck--sidebar-sync)
+    name))
+
 ;;;###autoload
 (defun pi-deck-create-space (dir &optional name)
   "Create a space for project DIR named NAME and show its first pane.
@@ -295,15 +320,7 @@ NAME defaults to DIR's base name.  The first pane follows
      (list dir (read-string "Space name: "
                             (pi-deck--unique-space-name
                              (file-name-nondirectory (directory-file-name dir)))))))
-  (let* ((dir (file-name-as-directory (expand-file-name dir)))
-         (name (pi-deck--unique-space-name
-                (or (and name (not (string-empty-p name)) name)
-                    (file-name-nondirectory (directory-file-name dir))))))
-    (unless (file-directory-p dir) (user-error "Not a directory: %s" dir))
-    (pi-deck--register-space name dir)
-    (if (pi-deck--unused-tab-p)
-        (pi-deck--set-tab-group name)
-      (pi-deck--new-tab-in-space name))
+  (let ((name (pi-deck--make-space dir name)))
     (pcase pi-deck-new-space-action
       ('agent (pi-deck-new-agent nil))
       ('shell (pi-deck-new-shell))
@@ -515,14 +532,30 @@ Select the tab already showing it; otherwise use ACTION (default
   "Return the current space's directory, or `default-directory'."
   (or (pi-deck-space-dir (pi-deck-current-space)) default-directory))
 
+(defconst pi-deck--new-space-choice "New space…"
+  "Space picker entry that creates a space.")
+
+(defun pi-deck--read-space-or-new (prompt)
+  "Pick an existing space or `pi-deck--new-space-choice' with PROMPT.
+Return the chosen space name; a new space is created with an empty tab."
+  (let ((choice (pi-deck--read-space prompt t (list pi-deck--new-space-choice))))
+    (if (equal choice pi-deck--new-space-choice)
+        (let ((dir (pi-deck--read-project-dir)))
+          (pi-deck--make-space dir (read-string "Space name: "
+                                                (pi-deck--unique-space-name
+                                                 (file-name-nondirectory
+                                                  (directory-file-name dir))))))
+      choice)))
+
 (defun pi-deck--enter-pane-space ()
   "Make sure the selected tab belongs to a space that can hold panes.
-On the root tab or an ungrouped tab, read a space and switch to it."
+On the root tab or an ungrouped tab, pick a space (or create one) and
+switch to it."
   (let ((space (pi-deck-current-space)))
     (when (or (null space) (equal space pi-deck-root-name))
-      (unless (cdr (pi-deck-space-names))
-        (user-error "No spaces yet; create one with `pi-deck-create-space'"))
-      (pi-deck-select-space (pi-deck--read-space "Space: " t)))))
+      (let ((choice (pi-deck--read-space-or-new "Space: ")))
+        (unless (equal (pi-deck-current-space) choice)
+          (pi-deck-select-space choice))))))
 
 (defun pi-deck--unique-session-name (dir)
   "Return the next free numeric Pilish session name in DIR."
@@ -550,22 +583,23 @@ DIR defaults to the space's directory; ARGS are extra Pi arguments."
       (select-window (pi-deck--input-or-chat-window agent)))
     agent))
 
-(defun pi-deck-shell-program ()
-  "Return the program new shell panes run."
-  (or pi-deck-shell-program explicit-shell-file-name (getenv "ESHELL") shell-file-name))
-
 (defun pi-deck-start-shell (dir &optional name command)
-  "Start a terminal in DIR running COMMAND (a list) and return its buffer.
-NAME is the buffer name without stars."
-  (require 'eat)
+  "Start a ghostel terminal in DIR and return its buffer.
+COMMAND is a program with arguments (a list), else `pi-deck-shell-program'
+or ghostel's default shell.  NAME is the buffer name without stars.  The
+buffer stays after its process exits, so its output and status remain."
+  (require 'ghostel)
   (let* ((default-directory (file-name-as-directory (expand-file-name dir)))
-         (command (or command (list (pi-deck-shell-program))))
-         (name (string-trim (generate-new-buffer-name
-                             (format "*%s*" (or name "eat")))
-                            "\\*" "\\*"))
-         (buffer (let ((eat-kill-buffer-on-exit nil))
-                   (apply #'eat-make name (car command) nil (cdr command)))))
-    (with-current-buffer buffer (setq pi-deck--shell-command command))
+         (command (or command (and pi-deck-shell-program (list pi-deck-shell-program))))
+         (name (generate-new-buffer-name (format "*%s*" (or name "shell"))))
+         (buffer (if command
+                     (let ((buffer (generate-new-buffer name)))
+                       (ghostel-exec buffer (car command) (cdr command))
+                       buffer)
+                   (ghostel-create name))))
+    (with-current-buffer buffer
+      (setq-local ghostel-kill-buffer-on-exit nil)
+      (setq pi-deck--shell-command command))
     buffer))
 
 (defun pi-deck-new-shell (&optional split)
@@ -574,7 +608,7 @@ With SPLIT (prefix argument), show it in a new window to the right."
   (interactive (progn (pi-deck--enter-pane-space) (list current-prefix-arg)))
   (let* ((space (pi-deck-current-space))
          (buffer (pi-deck-start-shell (pi-deck--current-space-dir)
-                                      (format "eat:%s" (or space "shell"))))
+                                      (format "shell:%s" (or space "shell"))))
          (agent (pi-deck--track buffer 'shell))
          (window (if split (split-window (pi-deck--pane-window) nil 'right)
                    (pi-deck--pane-window))))

@@ -4,14 +4,15 @@ Herdr's essentials inside Emacs, for [Pi](https://pi.dev) sessions run through
 [Pilish](https://github.com/offline-ant/pilish/tree/pi-orchestration):
 spaces, tabs, an agent overview with status, attention navigation,
 notifications, and a root tab that controls the Emacs daemon. Built on Emacs
-31's `tab-bar`, side windows and `transient`; terminals use EAT.
+31's `tab-bar`, side windows and `transient`; terminals use
+[ghostel](https://github.com/dakra/ghostel) (libghostty-vt).
 
 | Herdr | pi-deck |
 |---|---|
 | workspace | **space**: a `tab-bar` tab group with a project directory and Git branch |
 | tab | **tab** in a space: a window layout |
-| pane | window showing a Pilish chat (with its input below) or an EAT terminal |
-| agent | Pilish session (root or orchestration worker) or EAT terminal |
+| pane | window showing a Pilish chat (with its input below) or a ghostel terminal |
+| agent | Pilish session (root or orchestration worker) or ghostel terminal |
 | sidebar / goto picker | `pi-deck-sidebar-toggle` / `pi-deck-goto` |
 | server + clients | the Emacs daemon; every `emacsclient` frame gets the deck's tabs |
 
@@ -29,14 +30,22 @@ Each agent has a base state and a *seen* flag:
 
 Attention priority is blocked > done > working > idle > unknown. Tabs and
 spaces show the most urgent status of their agents. Terminal status needs
-prompt marks: OSC 133 (`A` prompt, `C` command, `D` done; fish 4 emits them,
-bash via `pi-ant/orchestration/shell/osc133.bash`) or EAT's own shell
-integration.
+prompt marks: OSC 133 (`A` prompt, `C` command, `D` done). New shell panes
+run ghostel's default shell (`ghostel-shell`, else `pi-deck-shell-program`),
+whose shell integration emits them for bash, zsh, fish and nushell; other
+programs need their own (fish 4 natively, bash via
+`pi-ant/orchestration/shell/osc133.bash`). Exited terminals keep their buffer
+and show their exit status.
 
-With `pi-deck-defer-dialogs` (default on), Pi dialogs never interrupt you:
-the agent turns blocked and you answer when you jump to it (`RET` in the
-overview, `pi-deck-goto`, `pi-deck-next-attention`), with `A`, or
-`M-x pilish-answer-dialog`. Quitting the prompt leaves the dialog pending.
+With `pi-deck-dialog-style` `inline` (the default), Pi dialogs never
+interrupt you: the agent turns blocked and its question waits at the end of
+its chat with clickable choices. Jumping to it (`RET` in the overview,
+`pi-deck-goto`, `pi-deck-next-attention`) or `A` puts point on the first
+choice: click, `RET` or a digit answers, `TAB` moves, `C-c C-k` cancels;
+`C-u A` answers in the minibuffer instead. The input header shows
+`◉ answer: …` while a question waits; clicking it goes there. A question that
+follows your answer (the next `ask` question, its editor) takes focus, so
+multi-question flows are answered in a row; drafts are never touched.
 
 Notifications follow Herdr: *needs attention* on becoming blocked and
 *finished* on leaving work for idle, both suppressed while the agent is
@@ -46,7 +55,7 @@ when available, else the echo area (`pi-deck-notify-method`).
 ## Setup
 
 Requires Emacs 31.1, Pilish from the `pi-orchestration` branch (pending dialog
-API), EAT 0.9.4 and, for orchestration workers,
+API), ghostel 0.59.0 with its native module and, for orchestration workers,
 `pi-ant/orchestration/emacs/pi-orchestration.el`.
 
 ```elisp
@@ -68,11 +77,11 @@ client frame gets the tabs of an existing frame, or of the last closed one.
 | Key | Command |
 |---|---|
 | `d` | root overview ⇄ previous tab (`pi-deck-root`) |
-| `b` | toggle sidebar (follows tab switches) |
+| `b` | toggle sidebar (shown by default in every tab but the root; the choice is saved) |
 | `g` | go to agent (grouped by space; `C-u` narrows by status) |
 | `n` | next agent needing attention (blocked first, then done) |
 | `N` / `P` | next / previous agent in overview order |
-| `a` | new Pi agent in the current space (`pilish-start-session` in its directory) |
+| `a` | new Pi agent in the current space (`pilish-start-session` in its directory); outside a space, pick a space or **New space…** |
 | `e` | new shell pane (`C-u`: split right) |
 | `A` | answer the current agent's pending dialog |
 | `S` / `s` | create space (project directory) / switch space |
@@ -92,13 +101,20 @@ The header shows the status summary, Emacs version, server name, PID,
 uptime, clients, frames, live Pi sessions, socket, orchestration host status,
 notification method and state file. Agents follow, grouped by space
 (directory and branch), then by the tab showing them ("not shown in a tab"
-last); orchestration workers and panels nest under their parent.
+last); live orchestration workers and panels nest under their parent.
+
+Workers are ephemeral: Pi closes them once they return, and their buffers
+go. Each parent row is followed by a folded "N finished workers" line;
+unfold it and press `RET` (or click) on a worker to read its saved session
+in Pilish's read-only view. Parent chats link the same views: worker tool
+results carry `details.savedConversations`, shown by Pilish as "Pi
+sessions" links. The sidebar lists live agents only.
 
 | Key | Action |
 |---|---|
-| `RET` | jump to agent (answers a pending dialog) / fold space |
+| `RET` | jump to agent (answers a pending dialog) / fold space / show closed workers / read a closed worker |
 | `o` | show agent in another window, stay in the overview |
-| `TAB` | fold or unfold the space at point |
+| `TAB` | fold or unfold the space or closed workers at point |
 | `b` `w` `i` `d` `u` / `a` | filter blocked, working, idle, done, unknown / all |
 | `s` | sort by spaces or by priority (then most recent change) |
 | `n` `p` / `j` `k` | next / previous agent |
@@ -110,6 +126,24 @@ last); orchestration workers and panels nest under their parent.
 | `q` | back to the previous tab |
 
 The sidebar shows the same data compactly and uses the same keys.
+
+## Mouse
+
+In graphical and text frames (the config enables `xterm-mouse-mode`):
+click a tab to select it, a space (group) name to visit it, `mouse-2` or the
+tab's `x` to close it, `mouse-3` for its menu; click the status cell to jump
+to the next agent needing attention (else the overview). In the overview and
+sidebar, click a row to jump to its agent, `mouse-2` shows it in another
+window, and clicking a space header (or a closed-workers line) folds it.
+
+## Panels
+
+Terminals an agent starts with `panel-start` (Pi's Emacs orchestration
+host) appear at once without taking focus: below the parent agent's pane
+when it is on screen, otherwise in a new tab of the parent's space
+(`pi-deck-show-panels`, `pi-deck-panel-height`). When the panel closes,
+the window or tab opened for it goes too. Workers stay hidden until you
+jump to them.
 
 ## Menu, tab bar and preferences
 
@@ -127,7 +161,9 @@ terminal's name) unless renamed explicitly.
 
 ## Persistence and daemon restart
 
-`pi-deck-save-state` (also every 60 s and at exit) writes
+`pi-deck-save-state` (also about 2 s after changes — spaces, tabs, window
+layouts, agents starting, closing or finishing a turn — and at exit, never
+periodically; `pi-deck-save-delay`) writes
 `~/.emacs.d/var/pi-deck/state.eld`: spaces, a client frame's root and space
 tabs with window layouts (tabs outside spaces stay local to their frame), Pi sessions with their session files, and terminals with
 directory and command. `pi-deck-restore-state` resumes Pi sessions with
@@ -151,7 +187,9 @@ resume from disk. Reattach clients afterwards.
 `pi-deck-input-height`, `pi-deck-include-shells`, `pi-deck-notify-on`,
 `pi-deck-notify-shells`, `pi-deck-notify-bell`, `pi-deck-summary-statuses`,
 `pi-deck-layouts` (add your own presets), `pi-deck-grid-include-shells`,
-`pi-deck-sidebar-side`, `pi-deck-sidebar-width`, `pi-deck-status-icons`,
+`pi-deck-sidebar`, `pi-deck-sidebar-side`, `pi-deck-sidebar-width`,
+`pi-deck-show-panels`, `pi-deck-panel-height`,
+`pi-deck-finished-workers-limit`, `pi-deck-save-delay`, `pi-deck-status-icons`,
 `pi-deck-mirror-new-frames`, `pi-deck-restart-command`,
 `pi-deck-refresh-interval`.
 
@@ -159,10 +197,11 @@ resume from disk. Reattach clients afterwards.
 
 ```sh
 make test     # byte-compile (warnings are errors) + ERT, emacs -Q --batch
-make smoke    # real Pi + faux provider in a disposable daemon, incl. restart
+make smoke    # real shell pane, real Pi + faux provider in a disposable daemon, incl. restart
 ```
 
-Dependencies (EAT, Pilish's packages) install into `.cache/elpa/<version>`;
+Dependencies (ghostel with its prebuilt native module, Pilish's packages)
+install into `.cache/elpa/<version>`;
 Pilish is taken from `../pilish` (`PILISH_DIR`), orchestration from
 `../pi-ant/orchestration/emacs` (`ORCHESTRATION_DIR`). The smoke test uses a
 private server socket and agent directory, only the in-process faux provider

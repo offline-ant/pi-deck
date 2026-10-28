@@ -4,7 +4,7 @@
 
 ;;; Commentary:
 
-;; Agents are Pilish sessions (identified by their chat buffer) and EAT
+;; Agents are Pilish sessions (identified by their chat buffer) and ghostel
 ;; terminal buffers.  Each agent has a base state (idle, working, blocked,
 ;; unknown) and a seen flag; an idle agent that worked while nobody was
 ;; looking is "done" until its buffer is shown.  Attention priority is
@@ -19,7 +19,6 @@
 (require 'pilish)
 
 (declare-function pi-orchestration-targets "pi-orchestration" ())
-(defvar eat-terminal)
 
 (defgroup pi-deck nil
   "Herdr-style spaces, tabs and agent overview for Pi sessions."
@@ -33,7 +32,7 @@
   :group 'pi-deck)
 
 (defcustom pi-deck-include-shells t
-  "Whether EAT terminal buffers are agents in the overview."
+  "Whether ghostel terminal buffers are agents in the overview."
   :type 'boolean
   :group 'pi-deck)
 
@@ -121,9 +120,9 @@
        (eq (buffer-local-value 'major-mode buffer) 'pilish-chat-mode)))
 
 (defun pi-deck-shell-buffer-p (buffer)
-  "Return non-nil when BUFFER is an EAT terminal buffer."
+  "Return non-nil when BUFFER is a ghostel terminal buffer."
   (and (buffer-live-p buffer)
-       (provided-mode-derived-p (buffer-local-value 'major-mode buffer) 'eat-mode)))
+       (provided-mode-derived-p (buffer-local-value 'major-mode buffer) 'ghostel-mode)))
 
 (defun pi-deck-agent-directory (agent)
   "Return AGENT's working directory."
@@ -178,8 +177,10 @@
   (let ((dialog (car (pi-deck-agent-dialogs agent)))
         (process (pi-deck-agent-process agent)))
     (cond
-     (dialog (format "asks: %s" (or (plist-get dialog :title)
-                                    (plist-get dialog :method))))
+     ;; Titles may add context lines after the question.
+     (dialog (format "asks: %s" (car (split-string (or (plist-get dialog :title)
+                                                       (plist-get dialog :method))
+                                                   "\n"))))
      ((and (eq (pi-deck-agent-kind agent) 'shell)
            (buffer-local-value 'pi-deck--shell-exit (pi-deck-agent-buffer agent)))
       (format "exited %s" (buffer-local-value 'pi-deck--shell-exit
@@ -206,7 +207,7 @@ it now."
 ;;;; State derivation
 
 (defvar-local pi-deck--shell-phase nil
-  "Shell prompt phase from OSC 133 or EAT marks: nil, `prompt' or `running'.")
+  "Shell prompt phase from OSC 133 marks: nil, `prompt' or `running'.")
 
 (defvar-local pi-deck--shell-exit nil
   "Exit status of the terminal's process once it exited, else nil.")
@@ -234,39 +235,36 @@ it now."
           ('prompt 'idle)
           (_ 'unknown))))))
 
-(defconst pi-deck--shell-mark-regexp
-  "\e]\\(?:133;\\([ACD]\\)\\|51;e;\\([BG]\\)\\)"
-  "Shell integration marks: OSC 133 A/C/D and EAT's own B (prompt)/G (command).")
+(defun pi-deck--shell-mark (type &rest _)
+  "Record OSC 133 mark TYPE of the current ghostel buffer.
+A (prompt) and D (command finished) mean the shell waits at its prompt;
+C (command output) means a command runs.  Ghostel parses the marks and
+calls `ghostel--osc133-marker' with the terminal buffer current; it has no
+public hook for A, which a freshly started shell's first prompt needs."
+  (let ((phase (pcase type ("C" 'running) ((or "A" "D") 'prompt)))
+        (buffer (current-buffer)))
+    (when (and phase (not (eq phase pi-deck--shell-phase)))
+      (setq pi-deck--shell-phase phase)
+      (when (pi-deck-agent buffer) (pi-deck-refresh-agent buffer)))))
 
-(defun pi-deck--shell-scan (buffer output)
-  "Update BUFFER's shell phase from the marks in process OUTPUT."
-  (let ((start 0) phase)
-    (while (string-match pi-deck--shell-mark-regexp output start)
-      (setq start (match-end 0)
-            phase (if (member (or (match-string 1 output) (match-string 2 output))
-                              '("C" "G"))
-                      'running 'prompt)))
-    (when (and phase (buffer-live-p buffer)
-               (not (eq phase (buffer-local-value 'pi-deck--shell-phase buffer))))
-      (with-current-buffer buffer (setq pi-deck--shell-phase phase))
-      (pi-deck-refresh-agent buffer))))
+(defun pi-deck--shell-exited (buffer event)
+  "Record the exit of terminal BUFFER's process described by EVENT.
+EVENT is the process status text, such as \"finished\" or \"exited
+abnormally with code 2\"."
+  (when (buffer-live-p buffer)
+    (with-current-buffer buffer
+      (setq pi-deck--shell-exit
+            (cond ((string-prefix-p "finished" event) 0)
+                  ((string-match "code \\([0-9]+\\)" event)
+                   (string-to-number (match-string 1 event)))
+                  (t (string-trim event)))))
+    (when (pi-deck-agent buffer) (pi-deck-refresh-agent buffer))))
 
-(defun pi-deck--watch-shell (buffer)
-  "Observe prompt marks in the output of terminal BUFFER's process."
-  (when-let* ((process (get-buffer-process buffer)))
-    (unless (process-get process 'pi-deck-watched)
-      (process-put process 'pi-deck-watched t)
-      (add-function :before (process-filter process)
-                    (lambda (_process output) (pi-deck--shell-scan buffer output))
-                    '((name . pi-deck-shell-marks)))
-      (add-function :after (process-sentinel process)
-                    (lambda (process _event)
-                      (unless (process-live-p process)
-                        (when (buffer-live-p buffer)
-                          (with-current-buffer buffer
-                            (setq pi-deck--shell-exit (process-exit-status process))))
-                        (pi-deck-refresh-agent buffer)))
-                    '((name . pi-deck-shell-exit))))))
+;; Every terminal records its marks and exit, tracked as an agent yet or not,
+;; so agents tracked later (such as orchestration panels) start out right.
+(with-eval-after-load 'ghostel
+  (advice-add 'ghostel--osc133-marker :after #'pi-deck--shell-mark)
+  (add-hook 'ghostel-exit-functions #'pi-deck--shell-exited))
 
 ;;;; Updates
 
@@ -310,7 +308,6 @@ Leaving work (working or blocked to idle) while invisible makes it done."
       (let ((agent (pi-deck-agent--make :buffer buffer :kind kind)))
         (puthash buffer agent pi-deck--agents)
         (setf (pi-deck-agent-state agent) (pi-deck--derive agent))
-        (when (eq kind 'shell) (pi-deck--watch-shell buffer))
         (pi-deck--schedule-update)
         agent)))
 
@@ -342,8 +339,6 @@ Leaving work (working or blocked to idle) while invisible makes it done."
                             (not pi-deck-include-shells)))
                    (progn (remhash buffer pi-deck--agents)
                           (pi-deck--schedule-update))
-                 (when (eq (pi-deck-agent-kind agent) 'shell)
-                   (pi-deck--watch-shell buffer))
                  (let ((link (cdr (assq buffer links))))
                    (unless (and (equal (car link) (pi-deck-agent-target agent))
                                 (eq (cdr link) (pi-deck-agent-parent agent)))
@@ -376,10 +371,6 @@ Leaving work (working or blocked to idle) while invisible makes it done."
   "Refresh CHAT-BUFFER's agent after an extension dialog opened or closed."
   (when (buffer-live-p chat-buffer)
     (pi-deck-refresh-agent chat-buffer)))
-
-(defun pi-deck--on-target (&rest _)
-  "Refresh agents after an orchestration target started or closed."
-  (pi-deck-refresh))
 
 (defun pi-deck-summary (&optional agents)
   "Return an alist of (STATUS . COUNT) over AGENTS (default all), urgent first."

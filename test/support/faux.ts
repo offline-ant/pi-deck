@@ -1,4 +1,4 @@
-import { fauxAssistantMessage, fauxProvider, type TranscriptContext } from "@earendil-works/pi-ai";
+import { fauxAssistantMessage, fauxProvider, fauxToolCall, type TranscriptContext } from "@earendil-works/pi-ai";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 /** Smoke-test fixture: every model call stays inside Pi's in-process faux provider. */
@@ -10,9 +10,23 @@ export default function piDeckFaux(pi: ExtensionAPI): void {
     return typeof message.content === "string" ? message.content
       : message.content.flatMap((item) => item.type === "text" ? [item.text] : []).join("\n");
   };
-  // Prompts containing "slow" stay working for a few seconds (manual checks).
+  // Prompts containing "slow" stay working for a few seconds (manual checks);
+  // "open panel NAME" / "close panel NAME" call the orchestration panel tools;
+  // "run worker" starts an orchestration `do` worker.
   provider.setResponses(Array.from({ length: 100 }, () => async (context: TranscriptContext) => {
+    const last = context.messages.at(-1);
+    if (last?.role === "toolResult") return fauxAssistantMessage(`faux tool done: ${last.toolName}`);
     const text = lastUserText(context);
+    if (text.includes("run worker")) {
+      return fauxAssistantMessage([fauxToolCall("do", { task: "say hello from the worker" })], { stopReason: "toolUse" });
+    }
+    const panel = /(open|close) panel (\S+)/.exec(text);
+    if (panel) {
+      const call = panel[1] === "open"
+        ? fauxToolCall("panel-start", { name: panel[2], command: "sleep 120" })
+        : fauxToolCall("panel-close", { name: panel[2] });
+      return fauxAssistantMessage([call], { stopReason: "toolUse" });
+    }
     if (text.includes("slow")) await new Promise((resolve) => setTimeout(resolve, 4000));
     return fauxAssistantMessage(`faux reply: ${text}`);
   }));

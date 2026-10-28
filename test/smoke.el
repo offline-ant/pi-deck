@@ -5,8 +5,10 @@
 ;;; Commentary:
 
 ;; Loaded by test/smoke.sh into `emacs -Q --daemon=<disposable>'.  Phase 1
-;; drives a real Pi RPC session (faux provider only) through working, done,
-;; blocked and answered states and saves the deck.  test/smoke.sh then
+;; drives a real shell pane (the user's default shell with ghostel's shell
+;; integration) through idle, working and exit, then a real Pi RPC session
+;; (faux provider only) through working, done, blocked and answered states
+;; and saves the deck.  test/smoke.sh then
 ;; restarts the daemon through `pi-deck-restart-daemon'; phase 2 checks that
 ;; the space and session were restored from the session file and still work.
 
@@ -40,9 +42,22 @@
   "Return CHAT's text."
   (with-current-buffer chat (buffer-substring-no-properties (point-min) (point-max))))
 
+(defun pi-deck-smoke--shell ()
+  "Drive a real default-shell pane through prompt, command and exit."
+  (let* ((shell (pi-deck-new-shell))
+         (buffer (pi-deck-agent-buffer shell)))
+    (pi-deck-smoke--wait "shell prompt" (lambda () (eq (pi-deck-agent-state shell) 'idle)) 30)
+    (with-current-buffer buffer (ghostel-send-string "sleep 1\n"))
+    (pi-deck-smoke--wait "running command" (lambda () (eq (pi-deck-agent-state shell) 'working)) 10)
+    (pi-deck-smoke--wait "finished command" (lambda () (eq (pi-deck-agent-state shell) 'idle)) 10)
+    (with-current-buffer buffer (ghostel-send-string "exit 3\n"))
+    (pi-deck-smoke--wait "shell exit" (lambda () (equal (pi-deck-agent-detail shell) "exited 3")) 10)
+    (pi-deck-stop-agent shell)))
+
 (defun pi-deck-smoke-phase1 (project)
   "Exercise a real session in a space for PROJECT; return its session file."
   (pi-deck-create-space project "smoke")
+  (pi-deck-smoke--shell)
   (let* ((agent (pi-deck-new-agent "main"))
          (chat (pi-deck-agent-buffer agent))
          ready)
@@ -72,12 +87,89 @@
       (pi-deck-overview-refresh)
       (unless (string-match-p "◉ blocked  main" (buffer-string))
         (error "Overview lacks the blocked agent:\n%s" (buffer-string))))
-    (cl-letf (((symbol-function 'yes-or-no-p) (lambda (_) t)))
-      (pi-deck-jump agent))
+    ;; Jumping focuses the inline question; pressing its Yes button answers.
+    (pi-deck-jump agent)
+    (with-current-buffer chat
+      (unless (eq (get-text-property (point) 'pilish-dialog-choice) 0)
+        (error "Jump did not focus the inline dialog"))
+      (push-button (point)))
     (pi-deck-smoke--wait "answered dialog" (lambda () (null (pi-deck-agent-dialogs agent))))
     (pi-deck-smoke--wait "idle after dialog" (lambda () (eq (pi-deck-agent-state agent) 'idle)))
     (pi-deck-save-state)
     (format "PASS1 %s" (plist-get (buffer-local-value 'pilish--state chat) :session-file))))
+
+(defun pi-deck-smoke--panel-buffer (name)
+  "Return the live orchestration panel buffer named NAME, or nil."
+  (cl-find-if (lambda (buffer) (string-prefix-p (format "pi-panel:%s:" name) (buffer-name buffer)))
+              (buffer-list)))
+
+(defun pi-deck-smoke-panels (suffix)
+  "Let the real agent open panels; check pi-deck shows them in a client frame.
+Panel names end in SUFFIX: Pi's panel names are global to the machine."
+  (let* ((below (concat "below-" suffix))
+         (aside (concat "aside-" suffix))
+         (frame (or (car (pi-deck--client-frames)) (error "No client frame")))
+         (agent (or (cl-find-if (lambda (agent) (equal (pi-deck-agent-session-name agent) "main"))
+                                (pi-deck-agents))
+                    (error "No main agent")))
+         (chat (pi-deck-agent-buffer agent)))
+    (with-selected-frame frame
+      ;; The parent is on screen: the panel opens below its pane, unfocused.
+      (pi-deck-reveal agent)
+      (let ((focus (window-buffer (selected-window))))
+        (pi-deck-smoke--submit chat (concat "open panel " below))
+        (pi-deck-smoke--wait "panel below the agent"
+                             (lambda () (let ((panel (pi-deck-smoke--panel-buffer below)))
+                                          (and panel (get-buffer-window panel frame)))))
+        (let* ((panel (pi-deck-smoke--panel-buffer below))
+               (window (get-buffer-window panel frame)))
+          (unless (eq (window-buffer (selected-window)) focus) (error "The panel took focus"))
+          (unless (< (window-pixel-top (get-buffer-window chat frame)) (window-pixel-top window))
+            (error "The panel is not below its agent"))
+          (unless (eq (pi-deck-agent-parent (pi-deck-agent panel)) chat)
+            (error "The panel is not linked to its agent"))
+          (with-current-buffer (pi-deck-overview-buffer t)
+            (pi-deck-overview-refresh)
+            (unless (string-match-p (concat "main\n +[^\n]*pi-panel:" below) (buffer-string))
+              (error "The sidebar lacks the panel under its agent:\n%s" (buffer-string)))))
+        (pi-deck-smoke--wait "turn end" (lambda () (eq (pi-deck-agent-state agent) 'idle)))
+        (pi-deck-smoke--submit chat (concat "close panel " below))
+        (pi-deck-smoke--wait "panel window removed"
+                             (lambda () (and (null (pi-deck-smoke--panel-buffer below))
+                                             (not (cl-find-if
+                                                   (lambda (window) (window-parameter window 'pi-deck-panel))
+                                                   (window-list frame 'no-minibuf)))))))
+      (pi-deck-smoke--wait "turn end" (lambda () (eq (pi-deck-agent-state agent) 'idle)))
+      ;; The parent is hidden: the panel gets a background tab in its space.
+      (pi-deck-root-show)
+      (let ((tabs (length (pi-deck--tabs frame))))
+        (pi-deck-smoke--submit chat (concat "open panel " aside))
+        (pi-deck-smoke--wait "panel tab" (lambda () (= (length (pi-deck--tabs frame)) (1+ tabs))))
+        (unless (pi-deck-root-tab-p (tab-bar--current-tab-find nil frame))
+          (error "The panel tab took focus"))
+        (unless (cl-find-if (lambda (tab) (and (equal (pi-deck--tab-group tab) "smoke")
+                                               (memq (pi-deck-smoke--panel-buffer aside)
+                                                     (pi-deck--tab-buffers tab frame))))
+                            (pi-deck--tabs frame))
+          (error "The panel tab is not in the agent's space"))
+        (pi-deck-smoke--wait "turn end" (lambda () (eq (pi-deck-agent-state agent) 'idle)))
+        (pi-deck-smoke--submit chat (concat "close panel " aside))
+        (pi-deck-smoke--wait "panel tab closed" (lambda () (= (length (pi-deck--tabs frame)) tabs))))
+      (pi-deck-smoke--wait "turn end" (lambda () (eq (pi-deck-agent-state agent) 'idle))))
+    "PASS-PANELS"))
+
+(defvar pi-deck-smoke-panels-result nil
+  "Outcome of `pi-deck-smoke-start-panels': nil while running, then a string.")
+
+(defun pi-deck-smoke-start-panels (suffix)
+  "Run `pi-deck-smoke-panels' with SUFFIX from a timer; poll the result.
+The panel tools reach Emacs through emacsclient, which this server cannot
+answer while it is still evaluating the request that runs the check."
+  (setq pi-deck-smoke-panels-result nil)
+  (run-at-time 0 nil (lambda ()
+                       (setq pi-deck-smoke-panels-result
+                             (condition-case err (pi-deck-smoke-panels suffix)
+                               (error (error-message-string err)))))))
 
 (defun pi-deck-smoke-phase2 (session-file)
   "Check the restored deck resumed SESSION-FILE and still answers."

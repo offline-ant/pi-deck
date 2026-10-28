@@ -13,7 +13,9 @@
 
 (require 'pi-deck-core)
 (require 'pi-deck-spaces)
+(require 'pi-deck-workers)
 
+(declare-function pi-deck-save-preference "pi-deck-tabbar" (variable))
 (declare-function pi-deck-daemon-info-lines "pi-deck-daemon" ())
 (declare-function pi-deck-menu "pi-deck-menu" ())
 (declare-function pi-deck-answer-dialog "pi-deck-goto" (&optional agent))
@@ -24,6 +26,12 @@
 (defcustom pi-deck-sidebar-width 36
   "Width of the agent sidebar window."
   :type 'natnum
+  :group 'pi-deck)
+
+(defcustom pi-deck-sidebar t
+  "Whether the agent sidebar is shown in every tab except the root tab.
+`pi-deck-sidebar-toggle' changes it and saves the choice as a preference."
+  :type 'boolean
   :group 'pi-deck)
 
 (defcustom pi-deck-sidebar-side 'left
@@ -48,6 +56,22 @@
 
 (defvar-local pi-deck-overview--collapsed nil
   "Space names whose agents are hidden.")
+
+(defvar-local pi-deck-overview--expanded-workers nil
+  "Parent agent buffers whose closed workers are listed.")
+
+(defvar-keymap pi-deck-overview-row-map
+  :doc "Mouse bindings of overview and sidebar rows."
+  "<mouse-1>" #'pi-deck-overview-mouse-jump
+  "<mouse-2>" #'pi-deck-overview-mouse-show)
+
+(defun pi-deck-overview--clickable (string help)
+  "Return STRING as a clickable row with HELP shown on hover."
+  (add-text-properties 0 (max 0 (1- (length string)))
+                       (list 'mouse-face 'highlight 'help-echo help
+                             'keymap pi-deck-overview-row-map)
+                       string)
+  string)
 
 ;;;; Rendering
 
@@ -97,7 +121,39 @@
                                 'face 'shadow)
                     (if location (concat "  " location) "")
                     (if detail (propertize (concat "  " detail) 'face 'pi-deck-blocked) "")))))
-    (propertize (concat line "\n") 'pi-deck-agent agent)))
+    (pi-deck-overview--clickable
+     (propertize (concat line "\n") 'pi-deck-agent agent)
+     "mouse-1: jump to this agent; mouse-2: show it in another window")))
+
+(defun pi-deck-overview--insert-finished (agent depth)
+  "Insert AGENT's closed workers at tree DEPTH: a count, or the list."
+  (when-let* ((buffer (pi-deck-agent-buffer agent))
+              (records (and (not pi-deck-overview--compact)
+                            (null pi-deck-overview--filter)
+                            (pi-deck-finished-workers buffer))))
+    (let ((indent (concat "    " (make-string (* 2 depth) ?\s)))
+          (expanded (memq buffer pi-deck-overview--expanded-workers)))
+      (insert (pi-deck-overview--clickable
+               (propertize
+                (concat indent (if expanded "▾ " "▸ ")
+                        (propertize (format "%d finished worker%s" (length records)
+                                            (if (cdr records) "s" ""))
+                                    'face 'shadow)
+                        "\n")
+                'pi-deck-finished buffer)
+               "mouse-1: show or hide closed workers"))
+      (when expanded
+        (dolist (record records)
+          (insert (pi-deck-overview--clickable
+                   (propertize
+                    (concat indent "  ✓ "
+                            (format "%-24s" (truncate-string-to-width (plist-get record :name) 22))
+                            (propertize (format " %4s  %s" (pi-deck-age (plist-get record :time))
+                                                (abbreviate-file-name (plist-get record :session-file)))
+                                        'face 'shadow)
+                            "\n")
+                    'pi-deck-worker-record record)
+                   "mouse-1: read this worker's session")))))))
 
 (defun pi-deck-overview--visible-p (agent)
   "Return non-nil when AGENT passes this view's filter."
@@ -109,16 +165,18 @@
   (let* ((dir (pi-deck-space-dir space))
          (branch (and dir (not pi-deck-overview--compact) (pi-deck-git-branch dir)))
          (collapsed (member space pi-deck-overview--collapsed)))
-    (propertize
-     (concat (if collapsed "▸ " "▾ ")
-             (pi-deck-status-icon (or status 'idle)) " "
-             (propertize (or space "other") 'face 'bold)
-             (propertize (format " (%d)" count) 'face 'shadow)
-             (when (and dir (not pi-deck-overview--compact))
-               (propertize (concat "  " (abbreviate-file-name dir)) 'face 'shadow))
-             (when branch (propertize (concat "  " branch) 'face 'font-lock-constant-face))
-             "\n")
-     'pi-deck-space (or space "other"))))
+    (pi-deck-overview--clickable
+     (propertize
+      (concat (if collapsed "▸ " "▾ ")
+              (pi-deck-status-icon (or status 'idle)) " "
+              (propertize (or space "other") 'face 'bold)
+              (propertize (format " (%d)" count) 'face 'shadow)
+              (when (and dir (not pi-deck-overview--compact))
+                (propertize (concat "  " (abbreviate-file-name dir)) 'face 'shadow))
+              (when branch (propertize (concat "  " branch) 'face 'font-lock-constant-face))
+              "\n")
+      'pi-deck-space (or space "other"))
+     "mouse-1: fold or unfold this space")))
 
 (defun pi-deck-overview--insert-spaces (agents tab-index)
   "Insert AGENTS grouped by space and tab using TAB-INDEX."
@@ -159,7 +217,8 @@
                                "  not shown in a tab\n")
                              'face 'shadow))))
                 (dolist (item (pi-deck-overview--tree (cdr group)))
-                  (insert (pi-deck-overview--agent-line (car item) (cdr item) nil)))))))))))
+                  (insert (pi-deck-overview--agent-line (car item) (cdr item) nil))
+                  (pi-deck-overview--insert-finished (car item) (1+ (cdr item))))))))))))
 
 (defun pi-deck-overview--insert-priority (agents tab-index)
   "Insert AGENTS by attention priority, then most recent change."
@@ -203,7 +262,7 @@
       (dolist (info (pi-deck-daemon-info-lines))
         (insert (propertize info 'face 'shadow) "\n"))
       (insert (propertize
-               (format "filter: %s · sort: %s · RET jump  o show  b/w/i/d/D/a filter  s sort  A answer  K stop  + space  N agent  E shell  m menu\n\n"
+               (format "filter: %s · sort: %s · RET/click jump  o show  TAB fold  b/w/i/d/D/a filter  s sort  A answer  K stop  + space  N agent  E shell  m menu\n\n"
                        (or pi-deck-overview--filter "all") pi-deck-overview--sort)
                'face 'shadow)))
     (when (and pi-deck-overview--compact pi-deck-overview--filter)
@@ -240,11 +299,41 @@
       (user-error "No agent on this line")))
 
 (defun pi-deck-overview-jump ()
-  "Jump to the agent at point, or toggle the space at point."
+  "Act on this line: jump to its agent, open a closed worker, or fold."
   (interactive)
-  (if-let* ((space (get-text-property (line-beginning-position) 'pi-deck-space)))
-      (pi-deck-overview-toggle-space space)
-    (pi-deck-jump (pi-deck-overview--agent-at-point))))
+  (let ((position (line-beginning-position)))
+    (cond
+     ((get-text-property position 'pi-deck-worker-record)
+      (pi-deck-open-finished-worker (get-text-property position 'pi-deck-worker-record)))
+     ((or (get-text-property position 'pi-deck-space)
+          (get-text-property position 'pi-deck-finished))
+      (pi-deck-overview-toggle))
+     (t (pi-deck-jump (pi-deck-overview--agent-at-point))))))
+
+(defun pi-deck-overview-mouse-jump (event)
+  "Act on the line clicked in EVENT, like \\[pi-deck-overview-jump]."
+  (interactive "e")
+  (mouse-set-point event)
+  (pi-deck-overview-jump))
+
+(defun pi-deck-overview-mouse-show (event)
+  "Show the agent clicked in EVENT in another window."
+  (interactive "e")
+  (mouse-set-point event)
+  (when (get-text-property (line-beginning-position) 'pi-deck-agent)
+    (pi-deck-overview-show)))
+
+(defun pi-deck-overview-toggle ()
+  "Fold the space at point, or show or hide the closed workers at point."
+  (interactive)
+  (if-let* ((parent (get-text-property (line-beginning-position) 'pi-deck-finished)))
+      (progn
+        (setq pi-deck-overview--expanded-workers
+              (if (memq parent pi-deck-overview--expanded-workers)
+                  (delq parent pi-deck-overview--expanded-workers)
+                (cons parent pi-deck-overview--expanded-workers)))
+        (pi-deck-overview--render))
+    (pi-deck-overview-toggle-space)))
 
 (defun pi-deck-overview-show ()
   "Show the agent at point in another window, keeping this view selected."
@@ -352,7 +441,7 @@
   :parent special-mode-map
   "RET" #'pi-deck-overview-jump
   "o" #'pi-deck-overview-show
-  "TAB" #'pi-deck-overview-toggle-space
+  "TAB" #'pi-deck-overview-toggle
   "g" #'pi-deck-overview-refresh
   "b" #'pi-deck-overview-filter
   "w" #'pi-deck-overview-filter
@@ -425,6 +514,7 @@
         (tab-bar-rename-tab "overview")
         (delete-other-windows)
         (switch-to-buffer (pi-deck-overview-buffer))
+        (pi-deck--sidebar-sync)
         (tab-bar-select-tab (1+ current))))))
 
 (defun pi-deck-root-show ()
@@ -455,9 +545,6 @@
 
 ;;;; Sidebar
 
-(defvar pi-deck--sidebar-visible nil
-  "Whether the sidebar should be shown in every tab.")
-
 (defun pi-deck--sidebar-show ()
   "Show the sidebar in the selected frame's current tab."
   (let ((window (display-buffer-in-side-window
@@ -473,19 +560,20 @@
 (defun pi-deck--sidebar-sync (&rest _)
   "Show or hide the sidebar in the current tab according to its toggle."
   (let ((window (get-buffer-window pi-deck-sidebar-buffer-name)))
-    (cond ((and pi-deck--sidebar-visible (not window)
+    (cond ((and pi-deck-sidebar (not window)
                 (not (pi-deck-root-tab-p (tab-bar--current-tab-find))))
            (pi-deck--sidebar-show))
-          ((and window (or (not pi-deck--sidebar-visible)
+          ((and window (or (not pi-deck-sidebar)
                            (pi-deck-root-tab-p (tab-bar--current-tab-find))))
            (delete-window window)))))
 
 ;;;###autoload
 (defun pi-deck-sidebar-toggle ()
-  "Toggle the agent sidebar in all tabs."
+  "Toggle the agent sidebar in all tabs, remembering the choice."
   (interactive)
-  (setq pi-deck--sidebar-visible (not pi-deck--sidebar-visible))
-  (pi-deck--sidebar-sync))
+  (setq pi-deck-sidebar (not pi-deck-sidebar))
+  (pi-deck--sidebar-sync)
+  (with-demoted-errors "pi-deck: %S" (pi-deck-save-preference 'pi-deck-sidebar)))
 
 (provide 'pi-deck-overview)
 ;;; pi-deck-overview.el ends here

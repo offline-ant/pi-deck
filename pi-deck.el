@@ -4,7 +4,7 @@
 
 ;; Author: Roelof
 ;; Version: 0.1.0
-;; Package-Requires: ((emacs "31.1") (pilish "3.1.0") (eat "0.9.4") (transient "0.9.0"))
+;; Package-Requires: ((emacs "31.1") (pilish "3.1.0") (ghostel "0.59.0") (transient "0.9.0"))
 ;; Keywords: tools, processes
 
 ;;; Commentary:
@@ -13,7 +13,7 @@
 ;; driven through Pilish:
 ;;
 ;; - spaces (tab groups per project) holding tabs (window layouts) whose
-;;   panes are Pilish chats or EAT terminals;
+;;   panes are Pilish chats or ghostel terminals;
 ;; - a pinned root tab with an overview of every agent, the daemon status
 ;;   and layout/tab bar controls;
 ;; - status per agent (blocked, done, working, idle, unknown) with seen
@@ -29,6 +29,7 @@
 
 (require 'pi-deck-core)
 (require 'pi-deck-spaces)
+(require 'pi-deck-workers)
 (require 'pi-deck-overview)
 (require 'pi-deck-goto)
 (require 'pi-deck-notify)
@@ -43,17 +44,19 @@
   :type 'number
   :group 'pi-deck)
 
-(defcustom pi-deck-defer-dialogs t
-  "Whether Pi dialogs wait for the user instead of prompting immediately.
-Blocked agents are answered when jumped to (see `pi-deck-answer-on-jump')
-or with `pi-deck-answer-dialog'.  Sets `pilish-defer-extension-dialogs'."
-  :type 'boolean
+(defcustom pi-deck-dialog-style 'inline
+  "How Pi dialogs ask while `pi-deck-mode' is on.
+Sets `pilish-extension-dialog-style'.  `inline' (the default) never
+interrupts: a blocked agent's question waits in its chat with clickable
+choices, focused when jumped to (see `pi-deck-answer-on-jump') or with
+`pi-deck-answer-dialog'.  `minibuffer' prompts as soon as Pi asks,
+wherever you are typing."
+  :type '(choice (const inline) (const minibuffer))
   :group 'pi-deck)
 
 (defvar pi-deck--refresh-timer nil "Reconciliation timer.")
-(defvar pi-deck--autosave-timer nil "Autosave timer.")
 (defvar pi-deck--age-ticks 0 "Reconciliations since the overview ages were redrawn.")
-(defvar pi-deck--previous-defer nil "Pilish dialog deferral before the mode.")
+(defvar pi-deck--previous-dialog-style nil "Pilish dialog style before the mode.")
 
 (defvar-keymap pi-deck-command-map
   :doc "pi-deck commands; bind to a prefix such as \"C-c d\"."
@@ -94,15 +97,11 @@ or with `pi-deck-answer-dialog'.  Sets `pilish-defer-extension-dialogs'."
     (setq pi-deck--age-ticks 0)
     (pi-deck-overview-refresh-visible)))
 
-(defun pi-deck--autosave ()
-  "Save the state when there is anything to save."
-  (when (or pi-deck-spaces (> (hash-table-count pi-deck--agents) 0))
-    (with-demoted-errors "pi-deck autosave: %S" (pi-deck-save-state))))
-
 (defun pi-deck--on-tab-select (&rest _)
-  "Update seen flags and the sidebar after a tab switch."
+  "Update seen flags, the sidebar and visible views after a tab switch."
   (pi-deck--sidebar-sync)
-  (pi-deck-mark-visible-seen))
+  (pi-deck-mark-visible-seen)
+  (pi-deck-overview-refresh-visible))
 
 (defun pi-deck--on-server-frame ()
   "Set up a frame created for an emacsclient."
@@ -113,14 +112,19 @@ or with `pi-deck-answer-dialog'.  Sets `pilish-defer-extension-dialogs'."
     (pilish-extension-dialog-functions . pi-deck--on-dialog)
     (pi-orchestration-target-functions . pi-deck--on-target)
     (pi-deck-agent-change-functions . pi-deck-notify-transition)
+    (pi-deck-agent-change-functions . pi-deck--save-on-agent-change)
     (pi-deck-update-hook . pi-deck-overview-refresh-visible)
+    (pi-deck-update-hook . pi-deck--save-on-structure-change)
+    (window-configuration-change-hook . pi-deck-schedule-save)
+    (kill-buffer-hook . pi-deck--on-kill-buffer)
     (window-buffer-change-functions . pi-deck-mark-visible-seen)
     (window-selection-change-functions . pi-deck-mark-visible-seen)
     (tab-bar-tab-post-select-functions . pi-deck--on-tab-select)
+    (tab-bar-tab-post-open-functions . pi-deck--on-tab-select)
     (tab-bar-tab-prevent-close-functions . pi-deck--prevent-root-close)
     (server-after-make-frame-hook . pi-deck--on-server-frame)
     (delete-frame-functions . pi-deck-remember-frame)
-    (kill-emacs-hook . pi-deck--autosave))
+    (kill-emacs-hook . pi-deck--save-now))
   "Hooks installed by `pi-deck-mode'.")
 
 ;;;###autoload
@@ -132,25 +136,24 @@ or with `pi-deck-answer-dialog'.  Sets `pilish-defer-extension-dialogs'."
     (if pi-deck-mode
         (add-hook (car hook) (cdr hook))
       (remove-hook (car hook) (cdr hook))))
-  (dolist (timer '(pi-deck--refresh-timer pi-deck--autosave-timer))
-    (when (symbol-value timer) (cancel-timer (symbol-value timer)) (set timer nil)))
+  (when pi-deck--refresh-timer
+    (cancel-timer pi-deck--refresh-timer)
+    (setq pi-deck--refresh-timer nil))
   (if pi-deck-mode
       (progn
-        (setq pi-deck--previous-defer pilish-defer-extension-dialogs
-              pilish-defer-extension-dialogs pi-deck-defer-dialogs)
+        (setq pi-deck--previous-dialog-style pilish-extension-dialog-style
+              pilish-extension-dialog-style pi-deck-dialog-style)
         (pi-deck-load-preferences)
         (pi-deck-tab-bar-enable)
         (pi-deck-refresh)
         (setq pi-deck--refresh-timer
               (run-with-timer pi-deck-refresh-interval pi-deck-refresh-interval #'pi-deck--tick))
-        (when pi-deck-autosave-interval
-          (setq pi-deck--autosave-timer
-                (run-with-timer pi-deck-autosave-interval pi-deck-autosave-interval
-                                #'pi-deck--autosave)))
         (pi-deck-restore-if-pending)
         (dolist (frame (pi-deck--client-frames))
-          (pi-deck-root-ensure frame)))
-    (setq pilish-defer-extension-dialogs pi-deck--previous-defer)
+          (pi-deck-root-ensure frame)
+          (with-selected-frame frame (pi-deck--sidebar-sync))))
+    (when pi-deck--save-timer (pi-deck--save-now))
+    (setq pilish-extension-dialog-style pi-deck--previous-dialog-style)
     (pi-deck-tab-bar-disable)))
 
 (provide 'pi-deck)

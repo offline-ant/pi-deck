@@ -10,7 +10,8 @@ Pilish. User documentation: `README.md`.
 | `pi-deck.el` | `pi-deck-mode`, `pi-deck-command-map`, hooks and timers |
 | `pi-deck-core.el` | agent registry, state derivation, seen/done, priority, terminal prompt marks |
 | `pi-deck-spaces.el` | space registry, tab helpers, agent locations, space/tab/pane commands, reveal |
-| `pi-deck-overview.el` | root tab, `*pi-deck*` overview, sidebar |
+| `pi-deck-workers.el` | orchestration panels shown in the parent's space, closed-worker records and read-only views |
+| `pi-deck-overview.el` | root tab, `*pi-deck*` overview, sidebar (clickable rows) |
 | `pi-deck-goto.el` | agent picker, jump, next attention/agent, dialog answering |
 | `pi-deck-notify.el` | blocked/finished notifications |
 | `pi-deck-tabbar.el` | tab bar status cell, icons, toggles, preferences file |
@@ -18,10 +19,10 @@ Pilish. User documentation: `README.md`.
 | `pi-deck-persist.el` | state file, restore, frame setup/mirroring |
 | `pi-deck-daemon.el` | server info, config reload, daemon restart |
 | `pi-deck-menu.el` | transient menu |
-| `test/pi-deck-test.el` | ERT suite (fake Pilish sessions, real EAT/tab bar) |
+| `test/pi-deck-test.el` | ERT suite (fake Pilish sessions, real ghostel terminals/tab bar) |
 | `test/smoke.sh`, `test/smoke.el`, `test/support/faux.ts` | real Pi smoke in a disposable daemon |
 
-Dependency order: core → spaces → overview → goto/notify/tabbar/layout/persist
+Dependency order: core → spaces → workers → overview → goto/notify/tabbar/layout/persist
 → daemon/menu → pi-deck. No cycles; forward references use `declare-function`.
 
 ## Rules
@@ -44,6 +45,11 @@ Dependency order: core → spaces → overview → goto/notify/tabbar/layout/per
   split and zoom panes, never their halves.
 - Only root and space tabs are saved or mirrored; tabs outside spaces stay
   frame-local.
+- State saves are event-driven (`pi-deck-schedule-save`): never add
+  periodic saving. Preferences changed by commands (sidebar toggle) are
+  saved with `pi-deck-save-preference`.
+- Orchestration targets are identified by `pi-orchestration-targets`
+  (`:kind`), not by terminal major mode.
 - `*.elc` files are build output (`make compile`), not tracked; the config
   loads this checkout with `load-prefer-newer`, so stale ones never shadow
   sources.

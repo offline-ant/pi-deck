@@ -16,6 +16,8 @@
 (require 'pi-deck-spaces)
 (require 'pi-deck-overview)
 
+(declare-function pi-deck-next-attention "pi-deck-goto" ())
+
 (defcustom pi-deck-summary-statuses '(blocked done working)
   "Statuses counted in the tab bar status cell."
   :type '(set (const blocked) (const done) (const working) (const idle) (const unknown))
@@ -45,19 +47,33 @@
 (defconst pi-deck-preference-variables
   '(pi-deck-tab-bar-groups pi-deck-tab-bar-status-cell pi-deck-tab-bar-icons
     tab-bar-show-inactive-group-tabs tab-bar-tab-hints tab-bar-show
-    pi-deck-sidebar-side pi-deck-sidebar-width pi-deck-reveal-action)
+    pi-deck-sidebar pi-deck-sidebar-side pi-deck-sidebar-width pi-deck-reveal-action)
   "Variables saved by `pi-deck-save-preferences'.")
 
 (defvar pi-deck--saved-tab-bar-settings nil
   "Tab bar settings from before `pi-deck-mode', restored when it is disabled.")
 
-(defun pi-deck-tab-bar-format-status ()
-  "Return the tab bar status cell."
+(defun pi-deck-tab-bar-status-string ()
+  "Return the status summary shown in the tab bar, or nil."
   (when pi-deck-tab-bar-status-cell
     (let ((summary (cl-remove-if-not (lambda (cell) (memq (car cell) pi-deck-summary-statuses))
                                      (pi-deck-summary))))
       (when summary
         (concat (pi-deck-summary-string summary) " ")))))
+
+(defun pi-deck-tab-bar-format-status ()
+  "Return the tab bar status cell; clicking it jumps to the next attention."
+  (when-let* ((status (pi-deck-tab-bar-status-string)))
+    `((pi-deck-status menu-item ,status pi-deck-tab-bar-status-click
+                      :help "mouse-1: next agent needing attention, else the overview"))))
+
+(defun pi-deck-tab-bar-status-click ()
+  "Jump to the next agent needing attention, or show the overview."
+  (interactive)
+  (if (cl-some (lambda (agent) (memq (pi-deck-agent-status agent) '(blocked done)))
+               (pi-deck-agents))
+      (pi-deck-next-attention)
+    (pi-deck-root-show)))
 
 (defun pi-deck-tab-name-icon (name tab _i)
   "Prefix tab NAME with TAB's rolled-up status icon."
@@ -153,27 +169,42 @@ Explicitly renamed tabs keep their names."
     (dolist (frame (frame-list)) (set-frame-parameter frame 'tab-bar-lines 0)))
   (message "Tab bar %s" (if tab-bar-show "shown" "hidden")))
 
+(defun pi-deck--read-preferences ()
+  "Return the saved preferences alist, or nil."
+  (when (file-readable-p pi-deck-preferences-file)
+    (with-temp-buffer
+      (insert-file-contents pi-deck-preferences-file)
+      (read (current-buffer)))))
+
+(defun pi-deck--write-preferences (preferences)
+  "Write the PREFERENCES alist to `pi-deck-preferences-file'."
+  (make-directory (file-name-directory pi-deck-preferences-file) t)
+  (with-file-modes #o600
+    (with-temp-file pi-deck-preferences-file
+      (let ((print-length nil) (print-level nil))
+        (insert ";; pi-deck preferences -*- lisp-data -*-\n")
+        (prin1 preferences (current-buffer))
+        (insert "\n")))))
+
 (defun pi-deck-save-preferences ()
   "Save tab bar and layout preferences to `pi-deck-preferences-file'."
   (interactive)
-  (make-directory (file-name-directory pi-deck-preferences-file) t)
-  (with-temp-file pi-deck-preferences-file
-    (let ((print-length nil) (print-level nil))
-      (insert ";; pi-deck preferences -*- lisp-data -*-\n")
-      (prin1 (mapcar (lambda (variable) (cons variable (symbol-value variable)))
-                     pi-deck-preference-variables)
-             (current-buffer))
-      (insert "\n")))
+  (pi-deck--write-preferences
+   (mapcar (lambda (variable) (cons variable (symbol-value variable)))
+           pi-deck-preference-variables))
   (message "Saved pi-deck preferences to %s" pi-deck-preferences-file))
+
+(defun pi-deck-save-preference (variable)
+  "Save VARIABLE's current value, keeping the other saved preferences."
+  (let ((preferences (pi-deck--read-preferences)))
+    (setf (alist-get variable preferences) (symbol-value variable))
+    (pi-deck--write-preferences preferences)))
 
 (defun pi-deck-load-preferences ()
   "Load preferences saved by `pi-deck-save-preferences', if any."
-  (when (file-readable-p pi-deck-preferences-file)
-    (dolist (cell (with-temp-buffer
-                    (insert-file-contents pi-deck-preferences-file)
-                    (read (current-buffer))))
-      (when (memq (car cell) pi-deck-preference-variables)
-        (set (car cell) (cdr cell))))))
+  (dolist (cell (pi-deck--read-preferences))
+    (when (memq (car cell) pi-deck-preference-variables)
+      (set (car cell) (cdr cell)))))
 
 (provide 'pi-deck-tabbar)
 ;;; pi-deck-tabbar.el ends here
