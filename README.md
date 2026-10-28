@@ -104,7 +104,7 @@ last); orchestration workers and panels nest under their parent.
 | `n` `p` / `j` `k` | next / previous agent |
 | `A` | answer the dialog of the agent at point |
 | `K` | stop the agent at point |
-| `+` `N` `E` | new space, agent, shell |
+| `+` `N` `E` | new space; new agent or shell in the space at point (else read) |
 | `g` | refresh |
 | `m` `?` | menu |
 | `q` | back to the previous tab |
@@ -122,11 +122,14 @@ The sidebar shows the same data compactly and uses the same keys.
 - state: save / restore;
 - daemon: reload `user-init-file`, restart the daemon.
 
+Tabs are named after the agent in their selected window (`pi:NAME`, or the
+terminal's name) unless renamed explicitly.
+
 ## Persistence and daemon restart
 
 `pi-deck-save-state` (also every 60 s and at exit) writes
-`~/.emacs.d/var/pi-deck/state.eld`: spaces, a client frame's tabs with
-window layouts, Pi sessions with their session files, and terminals with
+`~/.emacs.d/var/pi-deck/state.eld`: spaces, a client frame's root and space
+tabs with window layouts (tabs outside spaces stay local to their frame), Pi sessions with their session files, and terminals with
 directory and command. `pi-deck-restore-state` resumes Pi sessions with
 `pi --session FILE` (history included), restarts terminals, and recreates
 tabs of spaces the frame lacks. Orchestration workers and panels belong to
@@ -136,7 +139,8 @@ whenever the mode starts.
 `pi-deck-restart-daemon` lists the Pi sessions and terminals that will stop,
 asks for confirmation, saves the state, starts a detached helper that waits
 for this Emacs to exit and then runs `pi-deck-restart-command` (default
-`emacs --daemon=<server-name>`), and exits. The new daemon restores the state
+`emacs --daemon=<socket>`, the running server's absolute socket file, so the
+replacement listens exactly where clients connect), and exits. The new daemon restores the state
 when `pi-deck-mode` starts. In-flight Pi turns are interrupted; sessions
 resume from disk. Reattach clients afterwards.
 

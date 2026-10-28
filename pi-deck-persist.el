@@ -45,7 +45,8 @@ A daemon restarted by `pi-deck-restart-daemon' restores regardless."
   :group 'pi-deck)
 
 (defvar pi-deck--last-tabs nil
-  "Tabs of the most recently closed client frame, for the next frame.")
+  "Last known tabs of a client frame, refreshed by every save and when a
+client frame closes.  New frames and saves without any client frame use it.")
 
 (defvar pi-deck--pending-tabs nil
   "Restored tabs waiting for a client frame.")
@@ -69,11 +70,10 @@ TAB-INDEX caches `pi-deck-tab-index'."
     (unless (pi-deck-agent-target agent)
       (pcase (pi-deck-agent-kind agent)
         ('pi
-         (when-let* ((file (pi-deck-agent-session-file agent)))
-           (list :kind 'pi :buffer (buffer-name buffer)
-                 :dir (pi-deck-agent-directory agent)
-                 :name (pi-deck-agent-session-name agent)
-                 :session-file file :space space)))
+         (list :kind 'pi :buffer (buffer-name buffer)
+               :dir (pi-deck-agent-directory agent)
+               :name (pi-deck-agent-session-name agent)
+               :session-file (pi-deck-agent-session-file agent) :space space))
         ('shell
          (list :kind 'shell :buffer (buffer-name buffer)
                :dir (pi-deck-agent-directory agent)
@@ -82,19 +82,23 @@ TAB-INDEX caches `pi-deck-tab-index'."
                :space space))))))
 
 (defun pi-deck-frame-tabs (&optional frame)
-  "Return FRAME's tabs as restorable plists."
+  "Return FRAME's root and space tabs as restorable plists.
+Tabs outside spaces stay local to their frame: they are typically a new
+frame's initial tab, and restoring or mirroring them only adds clutter."
   (let ((frame (or frame (selected-frame))))
-    (mapcar (lambda (tab)
-              (let ((current (eq (car tab) 'current-tab)))
-                (list :name (alist-get 'name tab)
-                      :explicit (alist-get 'explicit-name tab)
-                      :group (pi-deck--tab-group tab)
-                      :current current
-                      :root (pi-deck-root-tab-p tab)
-                      :ws (if current
-                              (window-state-get (frame-root-window frame) t)
-                            (alist-get 'ws tab)))))
-            (pi-deck--tabs frame))))
+    (cl-remove-if
+     (lambda (record) (null (plist-get record :group)))
+     (mapcar (lambda (tab)
+               (let ((current (eq (car tab) 'current-tab)))
+                 (list :name (alist-get 'name tab)
+                       :explicit (alist-get 'explicit-name tab)
+                       :group (pi-deck--tab-group tab)
+                       :current current
+                       :root (pi-deck-root-tab-p tab)
+                       :ws (if current
+                               (window-state-get (frame-root-window frame) t)
+                             (alist-get 'ws tab)))))
+             (pi-deck--tabs frame)))))
 
 (defun pi-deck--state-frame ()
   "Return the client frame whose tabs represent the deck, or nil."
@@ -108,7 +112,12 @@ TAB-INDEX caches `pi-deck-tab-index'."
     (list :version 1
           :spaces pi-deck-spaces
           :sidebar pi-deck--sidebar-visible
-          :tabs (if frame (pi-deck-frame-tabs frame) (or pi-deck--pending-tabs pi-deck--last-tabs))
+          ;; Without a client frame, keep the last known tabs: a terminal
+          ;; that dies (closed SSH, killed multiplexer) deletes its frames
+          ;; without `delete-frame-functions'.
+          :tabs (if frame
+                    (setq pi-deck--last-tabs (pi-deck-frame-tabs frame))
+                  (or pi-deck--pending-tabs pi-deck--last-tabs))
           :agents (delq nil (mapcar (lambda (agent) (pi-deck--agent-record agent tab-index))
                                     (pi-deck-agents))))))
 
@@ -149,12 +158,14 @@ TAB-INDEX caches `pi-deck-tab-index'."
             (let ((agent
                    (pcase (plist-get record :kind)
                      ('pi
+                      ;; Pi writes a session file only once it has history;
+                      ;; an agent without one restarts as a fresh session.
                       (let ((file (plist-get record :session-file)))
-                        (when (file-readable-p file)
-                          (pi-deck--track
-                           (pilish-start-session dir (plist-get record :name)
-                                                 :args (list "--session" file))
-                           'pi))))
+                        (pi-deck--track
+                         (pilish-start-session dir (plist-get record :name)
+                                               :args (and file (file-readable-p file)
+                                                          (list "--session" file)))
+                         'pi)))
                      ('shell
                       (pi-deck--track
                        (pi-deck-start-shell dir (string-trim (plist-get record :buffer) "\\*" "\\*")
@@ -176,7 +187,13 @@ A lone unused initial tab is replaced."
            (lone (and (= (length initial) 2)
                       (cl-position-if-not #'pi-deck-root-tab-p initial)))
            (lone (and lone (null (pi-deck--tab-group (nth lone initial)))
-                      (eq (car (nth lone initial)) 'current-tab) (one-window-p)
+                      (eq (car (nth lone initial)) 'current-tab)
+                      ;; A single window besides the sidebar.
+                      (= 1 (cl-count-if-not
+                            (lambda (window)
+                              (equal (buffer-name (window-buffer window))
+                                     pi-deck-sidebar-buffer-name))
+                            (window-list nil 'no-minibuf)))
                       (1+ lone)))
            (existing (delq nil (mapcar #'pi-deck--tab-group initial)))
            selected)
@@ -191,7 +208,9 @@ A lone unused initial tab is replaced."
             (when-let* ((ws (plist-get tab :ws)))
               (condition-case nil
                   (window-state-put ws (frame-root-window) 'safe)
-                (error (delete-other-windows))))
+                (error (delete-other-windows)))
+              (when (window-parameter (selected-window) 'window-side)
+                (select-window (or (get-mru-window nil nil t) (window-main-window)))))
             (when (plist-get tab :current)
               (setq selected (1+ (tab-bar--current-tab-index)))))))
       ;; LONE (a tab number) was the frame's unused initial tab; new

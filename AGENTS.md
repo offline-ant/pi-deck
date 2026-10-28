@@ -37,6 +37,16 @@ Dependency order: core → spaces → overview → goto/notify/tabbar/layout/per
   `user-emacs-directory`/var/pi-deck/.
 - Tests never call paid models: ERT uses fake sessions, smoke uses Pi's faux
   provider with a private agent directory and server socket.
+- Evil: the overview's keys live in its normal-state auxiliary map (built
+  from `pi-deck-overview-mode-map`), which beats evil-collection's
+  `special-mode` bindings; refresh is `gr` there so the `g` prefix survives.
+- A chat window plus its input window is one pane (`pi-deck--pane-of`);
+  split and zoom panes, never their halves.
+- Only root and space tabs are saved or mirrored; tabs outside spaces stay
+  frame-local.
+- `*.elc` files are build output (`make compile`), not tracked; the config
+  loads this checkout with `load-prefer-newer`, so stale ones never shadow
+  sources.
 
 ## Checks
 

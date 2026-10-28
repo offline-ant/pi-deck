@@ -10,8 +10,12 @@ export default function piDeckFaux(pi: ExtensionAPI): void {
     return typeof message.content === "string" ? message.content
       : message.content.flatMap((item) => item.type === "text" ? [item.text] : []).join("\n");
   };
-  provider.setResponses(Array.from({ length: 100 }, () => async (context: TranscriptContext) =>
-    fauxAssistantMessage(`faux reply: ${lastUserText(context)}`)));
+  // Prompts containing "slow" stay working for a few seconds (manual checks).
+  provider.setResponses(Array.from({ length: 100 }, () => async (context: TranscriptContext) => {
+    const text = lastUserText(context);
+    if (text.includes("slow")) await new Promise((resolve) => setTimeout(resolve, 4000));
+    return fauxAssistantMessage(`faux reply: ${text}`);
+  }));
   pi.registerProvider(provider.provider);
   pi.on("before_agent_start", (_event, ctx) => {
     if (ctx.model?.provider !== "pi-deck-faux") throw new Error("pi-deck smoke refuses non-faux providers");

@@ -82,10 +82,28 @@
                 #'tab-bar-format-align-right
                 #'pi-deck-tab-bar-format-status)))
 
+(defun pi-deck-tab-name ()
+  "Name a tab after the agent in its selected window, else after its buffer.
+Pi agents are \"pi:NAME\", terminals their buffer name without stars.
+Explicitly renamed tabs keep their names."
+  (let* ((window (or (minibuffer-selected-window)
+                     (and (window-minibuffer-p) (get-mru-window))
+                     (selected-window)))
+         ;; Side windows such as the sidebar do not name tabs.
+         (window (if (window-parameter window 'window-side)
+                     (or (get-mru-window nil nil t) window)
+                   window))
+         (buffer (window-buffer window))
+         (agent (pi-deck-agent (or (pilish-session-chat-buffer buffer) buffer))))
+    (cond ((null agent) (tab-bar-tab-name-current))
+          ((eq (pi-deck-agent-kind agent) 'pi) (concat "pi:" (pi-deck-agent-name agent)))
+          (t (pi-deck-agent-name agent)))))
+
 (defun pi-deck-tab-bar-apply ()
   "Apply pi-deck's tab bar settings."
   (setq tab-bar-format (pi-deck--tab-bar-format)
-        tab-bar-tab-group-format-function #'pi-deck-tab-group-format)
+        tab-bar-tab-group-format-function #'pi-deck-tab-group-format
+        tab-bar-tab-name-function #'pi-deck-tab-name)
   (add-to-list 'tab-bar-tab-name-format-functions #'pi-deck-tab-name-icon)
   (force-mode-line-update t))
 
@@ -95,6 +113,7 @@
     (setq pi-deck--saved-tab-bar-settings
           (list (cons 'tab-bar-format tab-bar-format)
                 (cons 'tab-bar-tab-group-format-function tab-bar-tab-group-format-function)
+                (cons 'tab-bar-tab-name-function tab-bar-tab-name-function)
                 (cons 'tab-bar-tab-name-format-functions tab-bar-tab-name-format-functions))))
   (pi-deck-tab-bar-apply)
   (tab-bar-mode 1))

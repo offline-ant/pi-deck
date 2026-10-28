@@ -18,7 +18,8 @@
 (declare-function pi-deck-menu "pi-deck-menu" ())
 (declare-function pi-deck-answer-dialog "pi-deck-goto" (&optional agent))
 (declare-function pi-deck-jump "pi-deck-goto" (agent))
-(defvar evil-motion-state-modes)
+(declare-function evil-set-initial-state "evil-core" (mode state))
+(declare-function evil-define-key* "evil-core" (state keymap key def &rest bindings))
 
 (defcustom pi-deck-sidebar-width 36
   "Width of the agent sidebar window."
@@ -317,6 +318,28 @@
   (interactive)
   (pi-deck-answer-dialog (pi-deck-overview--agent-at-point)))
 
+(defun pi-deck-overview--space-at-point ()
+  "Return the space of this line (header or agent), or nil."
+  (let ((space (or (get-text-property (line-beginning-position) 'pi-deck-space)
+                   (when-let* ((agent (get-text-property (line-beginning-position)
+                                                         'pi-deck-agent)))
+                     (pi-deck-agent-space agent)))))
+    (and space (member space (cdr (pi-deck-space-names))) space)))
+
+(defun pi-deck-overview-new-agent ()
+  "Start a Pi agent in the space at point (else a space read), and show it."
+  (interactive)
+  (when-let* ((space (pi-deck-overview--space-at-point)))
+    (pi-deck-select-space space))
+  (call-interactively #'pi-deck-new-agent))
+
+(defun pi-deck-overview-new-shell ()
+  "Open a shell in the space at point (else a space read), and show it."
+  (interactive)
+  (when-let* ((space (pi-deck-overview--space-at-point)))
+    (pi-deck-select-space space))
+  (call-interactively #'pi-deck-new-shell))
+
 (defun pi-deck-overview-quit ()
   "Leave the overview: hide the sidebar, or return from the root tab."
   (interactive)
@@ -346,8 +369,8 @@
   "A" #'pi-deck-overview-answer
   "K" #'pi-deck-overview-stop
   "+" #'pi-deck-create-space
-  "N" #'pi-deck-new-agent
-  "E" #'pi-deck-new-shell
+  "N" #'pi-deck-overview-new-agent
+  "E" #'pi-deck-overview-new-shell
   "m" #'pi-deck-menu
   "?" #'pi-deck-menu
   "q" #'pi-deck-overview-quit)
@@ -358,10 +381,23 @@
   (setq-local truncate-lines t)
   (hl-line-mode 1))
 
-;; Evil users get the view's own keys rather than motion-state ones.
-(with-eval-after-load 'evil
-  (when (fboundp 'evil-set-initial-state)
-    (evil-set-initial-state 'pi-deck-overview-mode 'emacs)))
+;; Evil users stay in normal state, so leader keys, `gg' and `/' keep
+;; working.  The view's own keys go into its normal-state keymap, which
+;; takes precedence over Evil's and evil-collection's `special-mode' ones;
+;; refresh moves from `g' to `gr' to leave the `g' prefix intact.
+(defun pi-deck-overview--evil-setup ()
+  "Set up Evil normal-state bindings for the overview."
+  (evil-set-initial-state 'pi-deck-overview-mode 'normal)
+  (let (bindings)
+    (map-keymap-internal
+     (lambda (event command)
+       (unless (eq event ?g)
+         (setq bindings (append bindings (list (vector event) command)))))
+     pi-deck-overview-mode-map)
+    (apply #'evil-define-key* 'normal pi-deck-overview-mode-map
+           "gr" #'pi-deck-overview-refresh bindings)))
+
+(with-eval-after-load 'evil (pi-deck-overview--evil-setup))
 
 (defun pi-deck-overview-buffer (&optional compact)
   "Return the overview buffer, or the sidebar buffer when COMPACT."

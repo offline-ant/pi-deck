@@ -23,7 +23,9 @@
 
 (defcustom pi-deck-restart-command '("emacs" "--daemon=%s")
   "Program and arguments that start the replacement daemon.
-\"%s\" in an argument is replaced by the current `server-name'."
+\"%s\" in an argument is replaced by the running server's absolute socket
+file (see `pi-deck-server-socket'), so the replacement listens exactly where
+clients connect, whatever its environment would otherwise resolve."
   :type '(repeat string)
   :group 'pi-deck)
 
@@ -37,11 +39,14 @@
   (and (bound-and-true-p server-process) (process-live-p server-process)))
 
 (defun pi-deck-server-socket ()
-  "Return this Emacs's server socket file, or nil."
+  "Return this Emacs's server socket file (or TCP auth file), or nil.
+An absolute `server-name' is the file itself."
   (when (pi-deck-server-running-p)
-    (if server-use-tcp
-        (expand-file-name server-name server-auth-dir)
-      (expand-file-name server-name server-socket-dir))))
+    (expand-file-name server-name (if server-use-tcp server-auth-dir server-socket-dir))))
+
+(defun pi-deck-server-display-name ()
+  "Return the server name without its directory."
+  (file-name-nondirectory server-name))
 
 (defun pi-deck--client-frames ()
   "Return frames that can show tabs: all frames except a daemon's own frame."
@@ -61,8 +66,9 @@
      (format "Emacs %s · %s · pid %d · up %s · clients %d · frames %d · live Pi sessions %d"
              emacs-version
              (cond ((and (daemonp) (pi-deck-server-running-p))
-                    (format "daemon %S" server-name))
-                   ((pi-deck-server-running-p) (format "server %S" server-name))
+                    (format "daemon %S" (pi-deck-server-display-name)))
+                   ((pi-deck-server-running-p)
+                    (format "server %S" (pi-deck-server-display-name)))
                    (t "no server"))
              (emacs-pid) (emacs-uptime "%h:%.2m")
              (length (bound-and-true-p server-clients))
@@ -102,9 +108,10 @@
 
 (defun pi-deck-restart-command-line ()
   "Return the expanded restart command."
-  (mapcar (lambda (argument)
-            (if (string-search "%s" argument) (format argument server-name) argument))
-          pi-deck-restart-command))
+  (let ((socket (or (pi-deck-server-socket) server-name)))
+    (mapcar (lambda (argument)
+              (if (string-search "%s" argument) (format argument socket) argument))
+            pi-deck-restart-command)))
 
 ;;;###autoload
 (defun pi-deck-restart-daemon (&optional force)
@@ -122,7 +129,7 @@ confirmation unless FORCE.  Pi sessions resume from their session files."
     (when (or force
               (yes-or-no-p
                (format "Restart daemon %S?%s\nIt runs: %s\nRestart? "
-                       server-name
+                       (pi-deck-server-display-name)
                        (if live (format "\nThese %d processes stop now (sessions resume from disk):\n%s"
                                         (length live) names)
                          "")

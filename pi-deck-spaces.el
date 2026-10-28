@@ -16,6 +16,8 @@
 (require 'pi-deck-core)
 
 (declare-function eat-make "eat" (name program &optional startfile &rest switches))
+(declare-function pi-deck-root-ensure "pi-deck-overview" (&optional frame))
+(declare-function pi-deck-root-show "pi-deck-overview" ())
 (defvar eat-kill-buffer-on-exit)
 (defvar explicit-shell-file-name)
 
@@ -435,8 +437,10 @@ With prefix argument STOP-AGENTS, also stop the space's agents."
       (let ((input (pilish-session-input-buffer buffer)))
         (when (and (buffer-live-p input) (not (get-buffer-window input))
                    (> (window-height window) (* 2 pi-deck-input-height)))
-          (set-window-buffer (split-window window (- pi-deck-input-height) 'below)
-                             input)
+          (let ((input-window (split-window window (- pi-deck-input-height) 'below)))
+            (set-window-buffer input-window input)
+            ;; Resizing the pane (splits, balancing) keeps the input's height.
+            (window-preserve-size input-window nil t))
           (with-selected-window window (goto-char (point-max))))))
     window))
 
@@ -453,6 +457,27 @@ deleted and the chat window returned, so the whole pane can be reused."
         (when (and input-window chat-window (not (eq input-window chat-window)))
           (delete-window input-window))
         (select-window (or chat-window (selected-window)))))))
+
+(defun pi-deck--pane-of (window)
+  "Return the window holding WINDOW's whole pane.
+A Pilish chat window and its input window stacked together form one pane,
+held by their parent window; any other WINDOW is its own pane."
+  (let* ((chat (pilish-session-chat-buffer (window-buffer window)))
+         (chat-window (and chat (get-buffer-window chat)))
+         (input-window (and chat (get-buffer-window (pilish-session-input-buffer chat))))
+         (parent (and chat-window input-window (window-parent chat-window))))
+    (if (and parent
+             (memq window (list chat-window input-window))
+             (eq parent (window-parent input-window))
+             (= (window-child-count parent) 2))
+        parent
+      window)))
+
+(defun pi-deck--split-pane (window direction)
+  "Split the pane holding WINDOW in DIRECTION (`right' or `below') in half.
+Return the new live window.  Other panes keep their sizes, and a chat's
+input window stays attached to its chat."
+  (split-window (pi-deck--pane-of window) nil direction))
 
 (defun pi-deck--input-or-chat-window (agent)
   "Return the window to focus for AGENT: its input when shown, else its buffer."
@@ -478,11 +503,10 @@ Select the tab already showing it; otherwise use ACTION (default
         ('tab (pi-deck--new-tab-in-space (pi-deck-current-space) (pi-deck-agent-name agent))
               (pi-deck--display-agent-in-window agent (selected-window)))
         ('window (pi-deck--display-agent-in-window agent (pi-deck--pane-window)))
-        (_ (pi-deck--display-agent-in-window
-            agent (split-window (get-largest-window) nil
-                                (if (> (window-width (get-largest-window)) 160)
-                                    'right 'below)))
-           (balance-windows))))
+        (_ (let ((largest (get-largest-window)))
+             (pi-deck--display-agent-in-window
+              agent (pi-deck--split-pane largest (if (> (window-width largest) 160)
+                                                     'right 'below)))))))
     (when-let* ((window (pi-deck--input-or-chat-window agent)))
       (select-window window))
     (pi-deck-mark-seen agent)))
@@ -490,6 +514,15 @@ Select the tab already showing it; otherwise use ACTION (default
 (defun pi-deck--current-space-dir ()
   "Return the current space's directory, or `default-directory'."
   (or (pi-deck-space-dir (pi-deck-current-space)) default-directory))
+
+(defun pi-deck--enter-pane-space ()
+  "Make sure the selected tab belongs to a space that can hold panes.
+On the root tab or an ungrouped tab, read a space and switch to it."
+  (let ((space (pi-deck-current-space)))
+    (when (or (null space) (equal space pi-deck-root-name))
+      (unless (cdr (pi-deck-space-names))
+        (user-error "No spaces yet; create one with `pi-deck-create-space'"))
+      (pi-deck-select-space (pi-deck--read-space "Space: " t)))))
 
 (defun pi-deck--unique-session-name (dir)
   "Return the next free numeric Pilish session name in DIR."
@@ -503,8 +536,10 @@ Select the tab already showing it; otherwise use ACTION (default
 (defun pi-deck-new-agent (name &optional dir args)
   "Start a Pi session NAME in the current space and show it in this window.
 DIR defaults to the space's directory; ARGS are extra Pi arguments."
-  (interactive (list (let ((name (read-string "Agent name (empty for next number): ")))
-                       (and (not (string-empty-p name)) name))))
+  (interactive (progn
+                 (pi-deck--enter-pane-space)
+                 (list (let ((name (read-string "Agent name (empty for next number): ")))
+                         (and (not (string-empty-p name)) name)))))
   (let* ((dir (file-name-as-directory (expand-file-name (or dir (pi-deck--current-space-dir)))))
          (name (or name (pi-deck--unique-session-name dir)))
          (chat (pilish-start-session dir name :args args))
@@ -536,7 +571,7 @@ NAME is the buffer name without stars."
 (defun pi-deck-new-shell (&optional split)
   "Open a shell pane in the current space's directory.
 With SPLIT (prefix argument), show it in a new window to the right."
-  (interactive "P")
+  (interactive (progn (pi-deck--enter-pane-space) (list current-prefix-arg)))
   (let* ((space (pi-deck-current-space))
          (buffer (pi-deck-start-shell (pi-deck--current-space-dir)
                                       (format "eat:%s" (or space "shell"))))
@@ -549,27 +584,25 @@ With SPLIT (prefix argument), show it in a new window to the right."
     agent))
 
 (defun pi-deck-split-right ()
-  "Split the selected pane to the right and balance."
+  "Split the selected pane (a chat with its input counts as one) to the right."
   (interactive)
-  (select-window (split-window-right))
-  (balance-windows))
+  (select-window (pi-deck--split-pane (selected-window) 'right)))
 
 (defun pi-deck-split-below ()
-  "Split the selected pane below and balance."
+  "Split the selected pane (a chat with its input counts as one) below."
   (interactive)
-  (select-window (split-window-below))
-  (balance-windows))
+  (select-window (pi-deck--split-pane (selected-window) 'below)))
 
 (defun pi-deck-zoom ()
   "Toggle zooming the selected pane within the current tab."
   (interactive)
   (let* ((tab (tab-bar--current-tab-find))
          (saved (alist-get 'pi-deck-zoom (cdr tab))))
-    (if (and saved (one-window-p))
+    (if (and saved (eq (pi-deck--pane-of (selected-window)) (window-main-window)))
         (progn (set-window-configuration saved)
                (setf (alist-get 'pi-deck-zoom (cdr tab) nil 'remove) nil))
       (setf (alist-get 'pi-deck-zoom (cdr tab)) (current-window-configuration))
-      (delete-other-windows))))
+      (delete-other-windows (pi-deck--pane-of (selected-window))))))
 
 (defun pi-deck-close-pane ()
   "Close the selected pane; a chat pane also closes its input window."
