@@ -60,3 +60,17 @@ Dependency order: core → spaces → workers → overview → goto/notify/tabba
 make test     # compile with warnings as errors + ERT (emacs -Q --batch)
 make smoke    # real Pi/faux in a disposable daemon, including restart
 ```
+
+## Known issues
+
+- Tabs are per frame: a new frame copies the deck, but later tab edits do not sync
+  between open frames.
+- A new GUI frame can start with only one copied space tab (no root tab, no chat
+  window); `delete-other-windows` there fails on the side window.
+- Tabs created while the daemon has no client frame stay on its initial frame and do
+  not reach the next client (`pi-deck--last-tabs` updates only with a client frame).
+- A tab's automatic name follows its selected window, so opening a panel from the
+  sidebar renames the agent's tab.
+- Jumping to an agent shown only by its input window does not re-show its chat.
+- Terminal status hooks `ghostel--osc133-marker` (ghostel internal); ghostel upgrades
+  can break it.
