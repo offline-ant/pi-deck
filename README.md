@@ -105,7 +105,7 @@ last); orchestration workers and panels nest under their parent.
 | `A` | answer the dialog of the agent at point |
 | `K` | stop the agent at point |
 | `+` `N` `E` | new space; new agent or shell in the space at point (else read) |
-| `g` | refresh |
+| `g` (`gr` under Evil) | refresh |
 | `m` `?` | menu |
 | `q` | back to the previous tab |
 
