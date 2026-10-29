@@ -8,7 +8,7 @@
 ;; (vertico/consult show the groups).  Candidates contain their status word,
 ;; so typing "blocked" narrows; a prefix argument asks for a status first.
 ;; Next/previous commands cycle through agents needing attention or all
-;; agents in overview order.
+;; agents in sidebar order.
 
 ;;; Code:
 
@@ -21,17 +21,14 @@
   :group 'pi-deck)
 
 (defun pi-deck--ordered-agents (&optional tab-index)
-  "Return agents in overview order: space order, then tab, then name.
+  "Return agents in sidebar order: space order, then creation order.
 TAB-INDEX caches `pi-deck-tab-index'."
   (let* ((tab-index (or tab-index (pi-deck-tab-index)))
          (spaces (pi-deck-space-names)))
     (sort (pi-deck-agents)
           :key (lambda (agent)
-                 (let ((space (pi-deck-agent-space agent tab-index))
-                       (tab (pi-deck--agent-tab agent tab-index)))
-                   (list (or (cl-position space spaces :test #'equal) most-positive-fixnum)
-                         (if tab (nth 1 tab) most-positive-fixnum)
-                         (buffer-name (pi-deck-agent-buffer agent))))))))
+                 (or (cl-position (pi-deck-agent-space agent tab-index) spaces :test #'equal)
+                     most-positive-fixnum)))))
 
 (defun pi-deck--attention-agents ()
   "Return agents needing attention, most urgent and most recent first."
@@ -49,16 +46,12 @@ TAB-INDEX caches `pi-deck-tab-index'."
       (let ((agent-status (pi-deck-agent-status agent)))
         (when (or (null status) (eq status agent-status))
           (let* ((space (or (pi-deck-agent-space agent tab-index) "other"))
-                 (tab (pi-deck--agent-tab agent tab-index))
                  (candidate
                   (concat (pi-deck-status-icon agent-status) " "
                           (propertize (format "%-8s" agent-status)
                                       'face (pi-deck-status-face agent-status))
                           " " (pi-deck-agent-name agent)
-                          (propertize (format "  %s%s" space
-                                              (if tab (concat "/" (pi-deck-tab-label (car tab) (nth 1 tab)))
-                                                ""))
-                                      'face 'shadow)
+                          (propertize (format "  %s" space) 'face 'shadow)
                           ;; Keep candidates unique without showing buffer names.
                           (propertize (buffer-name (pi-deck-agent-buffer agent))
                                       'invisible t))))
@@ -151,12 +144,12 @@ With a prefix argument, first choose a STATUS to narrow to."
                       (car agents)))))
 
 (defun pi-deck-next-agent ()
-  "Jump to the next agent in overview order."
+  "Jump to the next agent in sidebar order."
   (interactive)
   (pi-deck--cycle (pi-deck--ordered-agents) 1))
 
 (defun pi-deck-previous-agent ()
-  "Jump to the previous agent in overview order."
+  "Jump to the previous agent in sidebar order."
   (interactive)
   (pi-deck--cycle (pi-deck--ordered-agents) -1))
 

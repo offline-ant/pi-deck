@@ -1,36 +1,35 @@
-;;; pi-deck-persist.el --- Save and restore spaces, tabs and sessions -*- lexical-binding: t; -*-
+;;; pi-deck-persist.el --- Save and restore spaces, layouts and sessions -*- lexical-binding: t; -*-
 
 ;; SPDX-License-Identifier: MIT
 
 ;;; Commentary:
 
-;; The state file records registered spaces, the tabs of a client frame
-;; (group, name and writable window state), Pilish sessions with their
+;; The state file records registered spaces, each space's layout (a
+;; writable window state), the current space, Pilish sessions with their
 ;; session files, and terminals with their directory and command.
-;; Restoring resumes Pi sessions from those files, restarts terminals, and
-;; recreates missing spaces' tabs.  Orchestration workers and panels belong
-;; to their parent Pi and are never restored.
+;; Restoring resumes Pi sessions from those files and restarts terminals;
+;; frames then show the current space with its layout.  Orchestration
+;; workers and panels belong to their parent Pi and are never restored.
 ;;
 ;; The file belongs to one Emacs server, recorded by its socket.  That
 ;; server restores it whenever it starts, however it stopped, and is the
 ;; only Emacs that saves it automatically.  Others (a plain `emacs', a
 ;; disposable test daemon) neither restore nor overwrite it.
 ;;
-;; Tabs are frame-local, but a daemon may have no client frame.  The last
-;; client frame's tabs are therefore kept when it closes and given to the
-;; next new frame, and other new frames copy the layout of an existing one.
+;; A new client frame shows the space selected last, with its last known
+;; layout (see `pi-deck--layouts').
 
 ;;; Code:
 
 (require 'pi-deck-core)
 (require 'pi-deck-spaces)
-(require 'pi-deck-overview)
+(require 'pi-deck-sidebar)
 
 (declare-function pi-deck--client-frames "pi-deck-daemon" ())
 (declare-function pi-deck-server-socket "pi-deck-daemon" ())
 
 (defcustom pi-deck-state-file (locate-user-emacs-file "var/pi-deck/state.eld")
-  "File holding saved spaces, tabs and sessions."
+  "File holding saved spaces, layouts and sessions."
   :type 'file
   :group 'pi-deck)
 
@@ -49,22 +48,10 @@ first save, which first moves it to a \".bak\" file."
 
 (defcustom pi-deck-save-delay 2
   "Seconds after a change before the state is saved, or nil to save only on exit.
-Changes are space and tab edits, window layout changes, agents starting or
+Changes are space edits, window layout changes, agents starting or
 closing, and agents finishing a turn.  Nothing is saved periodically."
   :type '(choice (const nil) number)
   :group 'pi-deck)
-
-(defcustom pi-deck-mirror-new-frames t
-  "Whether new client frames receive the tabs of an existing or last frame."
-  :type 'boolean
-  :group 'pi-deck)
-
-(defvar pi-deck--last-tabs nil
-  "Last known tabs of a client frame, refreshed by every save and when a
-client frame closes.  New frames and saves without any client frame use it.")
-
-(defvar pi-deck--pending-tabs nil
-  "Restored tabs waiting for a client frame.")
 
 (defvar pi-deck--state-owner nil
   "Server socket under which this Emacs owns `pi-deck-state-file', or nil.
@@ -99,52 +86,28 @@ TAB-INDEX caches `pi-deck-tab-index'."
                :command (buffer-local-value 'pi-deck--shell-command buffer)
                :space space))))))
 
-(defun pi-deck-frame-tabs (&optional frame)
-  "Return FRAME's root and space tabs as restorable plists.
-Tabs outside spaces stay local to their frame: they are typically a new
-frame's initial tab, and restoring or mirroring them only adds clutter."
-  (let ((frame (or frame (selected-frame))))
-    (cl-remove-if
-     (lambda (record) (null (plist-get record :group)))
-     (mapcar (lambda (tab)
-               (let ((current (eq (car tab) 'current-tab)))
-                 (list :name (alist-get 'name tab)
-                       :explicit (alist-get 'explicit-name tab)
-                       :group (pi-deck--tab-group tab)
-                       :current current
-                       :root (pi-deck-root-tab-p tab)
-                       :ws (if current
-                               (window-state-get (frame-root-window frame) t)
-                             (alist-get 'ws tab)))))
-             (pi-deck--tabs frame)))))
-
-(defun pi-deck--state-frame ()
-  "Return the client frame whose tabs represent the deck, or nil."
-  (let ((frames (pi-deck--client-frames)))
-    (if (memq (selected-frame) frames) (selected-frame) (car frames))))
-
 (defun pi-deck-state ()
-  "Return the current deck state."
-  (let ((tab-index (pi-deck-tab-index (pi-deck--state-frame)))
-        (frame (pi-deck--state-frame)))
-    (list :version 1
+  "Return the current deck state.
+The layouts on screen are remembered first, the selected frame's last."
+  (let ((frames (pi-deck--client-frames)))
+    (dolist (frame (append (remq (selected-frame) frames)
+                           (and (memq (selected-frame) frames) (list (selected-frame)))))
+      (pi-deck--remember-current-layout frame))
+    (list :version 2
           :owner (or pi-deck--state-owner (pi-deck-server-socket))
           :spaces pi-deck-spaces
-          ;; Without a client frame, keep the last known tabs: a terminal
-          ;; that dies (closed SSH, killed multiplexer) deletes its frames
-          ;; without `delete-frame-functions'.
-          :tabs (if frame
-                    (setq pi-deck--last-tabs (pi-deck-frame-tabs frame))
-                  (or pi-deck--pending-tabs pi-deck--last-tabs))
-          :agents (delq nil (mapcar (lambda (agent) (pi-deck--agent-record agent tab-index))
-                                    (pi-deck-agents))))))
+          :space pi-deck--last-space
+          :layouts pi-deck--layouts
+          :agents (let ((tab-index (pi-deck-tab-index)))
+                    (delq nil (mapcar (lambda (agent) (pi-deck--agent-record agent tab-index))
+                                      (pi-deck-agents)))))))
 
 (defvar pi-deck--last-saved nil
   "Cons of the file and text last written by `pi-deck-save-state'.")
 
 ;;;###autoload
 (defun pi-deck-save-state (&optional file)
-  "Save spaces, tabs and sessions to FILE (default `pi-deck-state-file').
+  "Save spaces, layouts and sessions to FILE (default `pi-deck-state-file').
 An unchanged state is not rewritten.  Saving the default file makes this
 server its owner.  The first save over an owned state file that was not
 restored keeps the old file as FILE.bak."
@@ -248,55 +211,13 @@ Nothing is saved during a restore: the file still lists what remains."
                           (plist-get record :buffer) (error-message-string err))
                  nil))))))
 
-(defun pi-deck-apply-tabs (tabs &optional frame)
-  "Recreate TABS in FRAME, skipping spaces that already have tabs there.
-A lone unused initial tab is replaced."
-  (with-selected-frame (or frame (selected-frame))
-    (pi-deck-root-ensure)
-    (let* ((initial (pi-deck--tabs))
-           (lone (and (= (length initial) 2)
-                      (cl-position-if-not #'pi-deck-root-tab-p initial)))
-           (lone (and lone (null (pi-deck--tab-group (nth lone initial)))
-                      (eq (car (nth lone initial)) 'current-tab)
-                      ;; A single window besides side windows (the sidebar).
-                      (= 1 (cl-count-if-not
-                            (lambda (window) (window-parameter window 'window-side))
-                            (window-list nil 'no-minibuf)))
-                      (1+ lone)))
-           (existing (delq nil (mapcar #'pi-deck--tab-group initial)))
-           selected)
-      ;; Window states name these buffers; create them before applying.
-      (pi-deck-overview-buffer)
-      (pi-deck-overview-buffer t)
-      (dolist (tab tabs)
-        (let ((group (plist-get tab :group)))
-          (unless (or (plist-get tab :root) (and group (member group existing)))
-            (pi-deck--new-tab-in-space (or group "") (and (plist-get tab :explicit)
-                                                          (plist-get tab :name)))
-            (when-let* ((ws (plist-get tab :ws)))
-              (condition-case nil
-                  (window-state-put ws (frame-root-window) 'safe)
-                (error (delete-other-windows)))
-              (pi-deck--select-ordinary-window)
-              ;; Window states keep no atoms: make the chat and input
-              ;; pairs atomic before the tab is stored.
-              (pilish-repair-window-pairs))
-            (when (plist-get tab :current)
-              (setq selected (1+ (tab-bar--current-tab-index)))))))
-      ;; LONE (a tab number) was the frame's unused initial tab; new
-      ;; tabs were added after it.
-      (when (and lone (> (length (pi-deck--tabs)) 2))
-        (let ((tab-bar-tab-prevent-close-functions nil))
-          (tab-bar-close-tab lone))
-        (when (and selected (> selected lone)) (cl-decf selected)))
-      (when selected (tab-bar-select-tab selected)))))
-
 ;;;###autoload
 (defun pi-deck-restore-state (&optional file)
-  "Restore spaces, sessions and tabs saved in FILE (default `pi-deck-state-file').
+  "Restore spaces, sessions and layouts saved in FILE.
+FILE defaults to `pi-deck-state-file'.
 Pi sessions resume from their session files, `pi-deck-restore-interval'
-seconds apart.  Once all exist, the tabs go to the selected client frame,
-or to the next client frame when there is none."
+seconds apart.  Once all exist, client frames showing no space show the
+saved current space; later frames show it too."
   (interactive)
   (when pi-deck--restoring
     (user-error "A pi-deck restore is still running"))
@@ -305,13 +226,18 @@ or to the next client frame when there is none."
     (dolist (space (plist-get state :spaces))
       (unless (pi-deck-space (plist-get space :name))
         (pi-deck--register-space (plist-get space :name) (plist-get space :dir))))
+    (dolist (layout (plist-get state :layouts))
+      (unless (assoc (car layout) pi-deck--layouts)
+        (pi-deck--remember-layout (car layout) (cdr layout))))
+    (when (pi-deck-space (plist-get state :space))
+      (setq pi-deck--last-space (plist-get state :space)))
     (setq pi-deck--restoring t)
-    (pi-deck--restore-next (plist-get state :agents) (plist-get state :tabs)
-                           (length (plist-get state :spaces)) 0)))
+    (pi-deck--restore-next (plist-get state :agents) (length (plist-get state :spaces)) 0)))
 
-(defun pi-deck--restore-next (records tabs spaces restored)
-  "Restore RECORDS one by one, then TABS; report SPACES and RESTORED sessions.
-After each started record, the rest wait `pi-deck-restore-interval'."
+(defun pi-deck--restore-next (records spaces restored)
+  "Restore RECORDS one by one; report SPACES and RESTORED sessions.
+After each started record, the rest wait `pi-deck-restore-interval'.
+Afterwards client frames showing no space show the current one."
   (setq pi-deck--restoring t)
   (while (and records (eq pi-deck--restoring t))
     (when (pi-deck--restore-agent (pop records))
@@ -319,15 +245,11 @@ After each started record, the rest wait `pi-deck-restore-interval'."
       (when (and records (> pi-deck-restore-interval 0))
         (setq pi-deck--restoring
               (run-with-timer pi-deck-restore-interval nil #'pi-deck--restore-next
-                              records tabs spaces restored)))))
+                              records spaces restored)))))
   (unless (timerp pi-deck--restoring)
     (setq pi-deck--restoring nil)
-    ;; Window states name the restored buffers: apply tabs only now.
-    (let ((frame (pi-deck--state-frame)))
-      (if frame
-          (pi-deck-apply-tabs tabs frame)
-        (setq pi-deck--pending-tabs tabs)))
-    (pi-deck--sidebar-sync)
+    ;; Layouts name the restored buffers: show them only now.
+    (mapc #'pi-deck--open-last-space (pi-deck--client-frames))
     (pi-deck--schedule-update)
     (pi-deck-schedule-save)
     (message "pi-deck: restored %d spaces and %d sessions" spaces restored)))
@@ -375,22 +297,19 @@ another server owns."
              :key (lambda (frame) (window-use-time (get-mru-window frame t)))
              :reverse t)))
 
-(defun pi-deck--show-in-space (agent)
-  "Show AGENT in a tab of its space in the selected frame and focus it.
-A tab already showing it is selected; otherwise a space without tabs gets
-one, and a space with tabs a new tab named after AGENT."
-  (pi-deck-reveal agent (if (pi-deck--space-tab-entries
-                             (pi-deck-agent-assigned-space agent))
-                            'tab
-                          'window))
-  (pi-deck--sidebar-sync))
+(defun pi-deck--open-last-space (frame)
+  "Show the space selected last in FRAME when FRAME shows no space."
+  (with-selected-frame frame
+    (when (and (null (pi-deck-current-space)) (pi-deck-space pi-deck--last-space))
+      (pi-deck-select-space pi-deck--last-space))
+    (pi-deck--sidebar-sync)))
 
 ;;;###autoload
 (defun pi-deck-show-session (chat)
   "Show the Pi session CHAT in the space for its directory; return its agent.
 That is the closest space containing the directory, created when missing.
-The most recently used client frame shows the session in a tab of that
-space and gets focus; without a client frame, the next one shows it.  While
+The most recently used client frame shows the session in that space and
+gets focus; without a client frame, the next one shows it.  While
 `pi-deck-mode' is on, this is `pi-orchestration-show-session-function',
 used by `/switch emacs'."
   (let* ((agent (pi-deck--track chat 'pi))
@@ -404,42 +323,28 @@ used by `/switch emacs'."
     (if-let* ((frame (pi-deck--recent-client-frame)))
         (progn
           (select-frame-set-input-focus frame)
-          (pi-deck--show-in-space agent))
+          (pi-deck-reveal agent))
       (setq pi-deck--pending-reveal chat))
     (pi-deck--schedule-update)
     agent))
 
 (defun pi-deck-setup-frame (&optional frame)
-  "Give the new client FRAME the deck's tabs."
+  "Show the space selected last in the new client FRAME.
+During a restore, the restore shows it once all sessions exist."
   (let ((frame (or frame (selected-frame))))
     (when (memq frame (pi-deck--client-frames))
-      (let ((source (cl-find-if (lambda (other) (and (not (eq other frame))
-                                                     (cl-some #'pi-deck--tab-group
-                                                              (pi-deck--tabs other))))
-                                (pi-deck--client-frames))))
-        (cond
-         ;; A running restore applies its tabs once all sessions exist.
-         (pi-deck--restoring (pi-deck-root-ensure frame))
-         (pi-deck--pending-tabs
-          (pi-deck-apply-tabs (prog1 pi-deck--pending-tabs (setq pi-deck--pending-tabs nil))
-                              frame))
-         ((and pi-deck-mirror-new-frames source)
-          (pi-deck-apply-tabs (pi-deck-frame-tabs source) frame))
-         ((and pi-deck-mirror-new-frames pi-deck--last-tabs)
-          (pi-deck-apply-tabs pi-deck--last-tabs frame))
-         (t (pi-deck-root-ensure frame)))
-        (with-selected-frame frame
-          (pi-deck-land-on-root)
-          (pi-deck--sidebar-sync)
-          (when-let* ((chat (prog1 pi-deck--pending-reveal (setq pi-deck--pending-reveal nil)))
-                      (agent (pi-deck-agent chat)))
-            (pi-deck--show-in-space agent)))))))
+      (unless pi-deck--restoring
+        (pi-deck--open-last-space frame))
+      (with-selected-frame frame
+        (pi-deck--sidebar-sync)
+        (when-let* ((chat (prog1 pi-deck--pending-reveal (setq pi-deck--pending-reveal nil)))
+                    (agent (pi-deck-agent chat)))
+          (pi-deck-reveal agent))))))
 
 (defun pi-deck-remember-frame (frame)
-  "Keep closing FRAME's tabs for the next client frame."
-  (when (and (memq frame (pi-deck--client-frames))
-             (cl-some #'pi-deck--tab-group (pi-deck--tabs frame)))
-    (setq pi-deck--last-tabs (pi-deck-frame-tabs frame))))
+  "Remember the layout closing FRAME shows for its space."
+  (when (memq frame (pi-deck--client-frames))
+    (pi-deck--remember-current-layout frame)))
 
 (provide 'pi-deck-persist)
 ;;; pi-deck-persist.el ends here

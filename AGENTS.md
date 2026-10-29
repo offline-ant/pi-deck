@@ -1,33 +1,31 @@
 # pi-deck — development guide
 
-Emacs package: Herdr-style spaces/tabs/agent overview for Pi sessions via
-Pilish. User documentation: `README.md`.
+Emacs package: project spaces (one window layout each) and an agent sidebar
+for Pi sessions via Pilish. User documentation: `README.md`.
 
 ## Files
 
 | File | Purpose |
 |---|---|
-| `pi-deck.el` | `pi-deck-mode`, `pi-deck-command-map`, hooks and timers |
+| `pi-deck.el` | `pi-deck-mode` (hides the tab bar), `pi-deck-command-map`, hooks and timers |
 | `pi-deck-core.el` | agent registry, state derivation, seen/done, priority, terminal prompt marks |
-| `pi-deck-spaces.el` | space registry, tab helpers, agent locations, space/tab/pane commands, reveal |
-| `pi-deck-workers.el` | orchestration panels and forks placed in the parent's space, closed-worker records and read-only views |
-| `pi-deck-close.el` | Herdr-style closing: stop plans for tabs, panes, agents and spaces, confirmation (popup dialog from the mouse), stopping and view removal, the tab close guard |
-| `pi-deck-headers.el` | pane title bars (header lines with optional prefix, status, model/context or exit, `[↑]` `[⑂]` (Pi) `[⤢]` `[✕]`) |
-| `pi-deck-keys.el` | key sheet: live keymap lookups, cached column layout, clickable entries |
-| `pi-deck-overview.el` | hidden root (overview) tab, `*pi-deck*` overview (ends with the key sheet), sidebar space tree (clickable rows and buttons), landing new frames on the overview |
-| `pi-deck-menus.el` | popup menus: spaces, new tab, and right-click menus for agents, closed workers, spaces and tabs; forking (`pi-deck-fork`) |
-| `pi-deck-goto.el` | agent picker, jump, next attention/agent, dialog answering |
+| `pi-deck-spaces.el` | space registry, hidden per-space layout tabs and remembered layouts (`pi-deck--layouts`, `pi-deck--last-space`), agent locations, space/pane commands, reveal |
+| `pi-deck-workers.el` | orchestration panels beside their parent, forks assigned to the parent's space, closed-worker records and read-only views |
+| `pi-deck-close.el` | hiding panes, stopping agents (with descendants) and closing spaces, confirmation (popup dialog from the mouse), view removal across frames and layouts |
+| `pi-deck-headers.el` | pane title bars (header lines with optional prefix, status, model/context or exit, `[↑]` `[↓]` `[⑂]` (Pi) `[⤢]` `[✕]`) |
+| `pi-deck-sidebar.el` | sidebar space tree (clickable rows and buttons), its header line (status summary, `pi-deck-sidebar-header-items`), shared width and narrow-frame hiding, preferences file |
+| `pi-deck-menus.el` | popup menus: right-click menus for agents, closed workers and spaces; forking (`pi-deck-fork`) |
+| `pi-deck-goto.el` | agent picker, jump, show alone, next attention/agent, dialog answering |
 | `pi-deck-notify.el` | blocked/finished notifications; `pi-deck-notify-functions` hook for other deliveries (pi-sound) |
-| `pi-deck-tabbar.el` | per-space tab bar (`tab-bar-format`), its `tab-bar-map` mouse bindings, stable tab names, status cell, toggles, preferences file |
-| `pi-deck-layout.el` | layout presets |
-| `pi-deck-persist.el` | state file, restore, frame setup/mirroring |
-| `pi-deck-daemon.el` | server info, config reload, daemon restart |
+| `pi-deck-layout.el` | grid of the space's agents |
+| `pi-deck-persist.el` | state file (version 2), restore, frame setup, `pi-deck-show-session` |
+| `pi-deck-daemon.el` | server info (`pi-deck-daemon-info`), config reload, daemon restart |
 | `pi-deck-menu.el` | transient menu |
-| `test/pi-deck-test.el` | ERT suite (fake Pilish sessions, real ghostel terminals/tab bar) |
+| `test/pi-deck-test.el` | ERT suite (fake Pilish sessions, real ghostel terminals) |
 | `test/smoke.sh`, `test/smoke.el`, `test/support/faux.ts` | real Pi smoke in a disposable daemon |
 
-Dependency order: core → spaces → workers → close → headers/keys → overview → menus →
-goto/notify/tabbar/layout/persist → daemon/menu → pi-deck. No cycles; forward
+Dependency order: core → spaces → workers → close → headers → sidebar → menus →
+goto/notify/layout/persist → daemon/menu → pi-deck. No cycles; forward
 references use `declare-function`.
 
 ## Rules
@@ -40,16 +38,21 @@ references use `declare-function`.
 - `pi-deck-agents` returns agents in creation order (`pi-deck-agent-number`);
   keep it the one stable order (saved state lists agents in it and restore
   re-tracks them in it). `pi-deck-agent-space` is the fixed home space
-  (assigned, parent, directory, displaying tab only as a last resort); use
-  `pi-deck--agent-tab` when you need where an agent is displayed.
-- Set tab groups with `pi-deck--set-tab-group`; `tab-bar-change-tab-group`'s
-  default hook moves tabs.
+  (assigned, parent, directory, displaying layout only as a last resort); use
+  `pi-deck--agent-tab` when you need which layout displays an agent.
+- A space's layout in a frame is one hidden `tab-bar` tab whose group is the
+  space name; `tab-bar-show` stays nil while `pi-deck-mode` is on. Switch
+  spaces only with `pi-deck-select-space` (it remembers the layout being
+  left); set tab groups with `pi-deck--set-tab-group`
+  (`tab-bar-change-tab-group`'s default hook moves tabs). Remembered layouts
+  are `window-state-get` of `window-main-window`, so side windows (the
+  sidebar) are never part of them.
 - Never write the user's init files; preferences and state live under
   `user-emacs-directory`/var/pi-deck/.
 - Tests never call paid models: ERT uses fake sessions, smoke uses Pi's faux
   provider with a private agent directory and server socket.
-- Evil: the overview's keys live in its normal-state auxiliary map (built
-  from `pi-deck-overview-mode-map`), which beats evil-collection's
+- Evil: the sidebar's keys live in its normal-state auxiliary map (built
+  from `pi-deck-sidebar-mode-map`), which beats evil-collection's
   `special-mode` bindings; refresh is `gr` there so the `g` prefix survives.
 - A chat window plus its input window is one Pilish pair (`pilish-window-pair`)
   and one pane (`pi-deck--pane-of`). Pane code uses Pilish's pair API
@@ -60,7 +63,7 @@ references use `declare-function`.
   `pilish-session-exists-p` and `pilish-view-session-file`; ask Pilish for a new
   accessor instead of reading `pilish--` state.
 - Pilish never guesses pairs from restored window shapes; pi-deck re-pairs
-  explicitly after `window-state-put` restores and tab switches
+  explicitly after `window-state-put` restores and space switches
   (`pilish-repair-window-pairs`).
 - Never split, display in or delete the selected window when it may be a side window
   (the sidebar). Commands act on `pi-deck--main-window` / `pi-deck--pane-window` (the
@@ -69,32 +72,24 @@ references use `declare-function`.
   never shows the sidebar). `get-largest-window`/`get-mru-window` skip dedicated pair
   windows unless asked; use these helpers instead. Select a non-side window
   (`pi-deck--select-ordinary-window`) before `delete-other-windows`;
-  `pi-deck--single-window` reduces a tab to one plain window.
-- Only root and space tabs are saved or mirrored; tabs outside spaces stay
-  frame-local.
-- The tab bar renders only the current space's tabs as ordinary `tab-N` /
-  `current-tab` items (non-current tabs keep a nil binding so tab-bar selects
-  them); pi-deck's own items are keyed `pi-deck-*` and run on release through
-  pi-deck's `tab-bar-map` bindings. Items from `pi-deck-tab-bar-extra-items`
-  (keys recorded at formatting in `pi-deck--extra-item-keys`) count as own
-  items, and their commands get the mouse-1 or mouse-3 click as key sequence.
-- In text terminals `pi-deck--tab-bar-item` hit-tests clicks itself
-  (`pi-deck--tab-bar-item-at`): `tab-bar--event-to-item` counts characters
-  and the right alignment as one column, missing wide labels and every
-  right-aligned item. Popup menus open on release (`mouse-3`,
-  never `down-mouse-3`): a text terminal menu opened on press picks its first
-  item at the release.
-- Closing goes through `pi-deck--tab-close-guard`
-  (`tab-bar-tab-prevent-close-functions`) and `pi-deck-close-*`; pi-deck's own
-  tab closes bind `pi-deck--closing-internally` (`pi-deck--close-tabs-internally`).
-  Stop confirmations put Cancel first (text terminal dialogs select the
+  `pi-deck--single-window` reduces a layout to one plain window.
+- The sidebar has one width for all frames and spaces: `pi-deck--sidebar-sync`
+  enforces `pi-deck-sidebar-width`, and `pi-deck--on-window-size-change` adopts
+  a dragged width (a sidebar resized within an unchanged frame). Frames
+  narrower than twice the width hide it.
+- Popup menus open on release (`mouse-3`, never `down-mouse-3`): a text
+  terminal menu opened on press picks its first item at the release.
+- Closing a pane only hides it (`pi-deck-hide-pane`); agents stop only through
+  `pi-deck-stop`/`pi-deck-stop-agents` and `pi-deck-close-space`. Stop
+  confirmations put Cancel first (text terminal dialogs select the
   highlighted item on any click). Stopping removes views before killing.
 - Header line buttons use `local-map` (header lines ignore `keymap`).
 - The pseudo-space for agents without a space is labelled "other"; a real
   space may have that name, so test registration (`pi-deck-space-names`),
   never the label.
-- Tab-bar restores can drop the pairs' atoms; `pi-deck--on-tab-select` repairs
-  pairs at once so commands right after a tab switch see them.
+- Tab switches (space switches) can drop the pairs' atoms;
+  `pi-deck--on-tab-select` repairs pairs at once so commands right after a
+  space switch see them.
 - State saves are event-driven (`pi-deck-schedule-save`): never add
   periodic saving. Preferences changed by commands (sidebar toggle) are
   saved with `pi-deck-save-preference`.
@@ -106,11 +101,6 @@ references use `declare-function`.
   server starts after the init file; sessions spawned earlier miss the
   orchestration environment). Tests bind a fake owner in
   `pi-deck-test--with-deck`; disposable daemons never own the user's file.
-- Key sheet entries name commands, never key strings: keys come from
-  `where-is-internal` (in the overview buffer for global commands, so the
-  Evil leader is found), Pilish keymaps or the transient menu. Never look
-  keys up per overview refresh; the cache is reset by `after-load-functions`
-  and interactive refresh.
 - Orchestration targets are identified by `pi-orchestration-targets`
   (`:kind`), not by terminal major mode.
 - `*.elc` files are build output (`make compile`), not tracked; the config
@@ -126,12 +116,8 @@ make smoke    # real Pi/faux in a disposable daemon: restart, then kill-emacs + 
 
 ## Known issues
 
-- Tabs are per frame: a new frame copies the deck, but later tab edits do not sync
-  between open frames.
-- Tabs created while the daemon has no client frame stay on its initial frame and do
-  not reach the next client (`pi-deck--last-tabs` updates only with a client frame).
-- Mirrored frames copy tabs, so closing a tab counts views in its own frame only: an
-  agent shown in a mirrored frame's copy of the tab still stops.
+- Layouts are per frame while open: two frames showing one space keep separate
+  layouts, and `pi-deck--layouts` keeps whichever was remembered last.
 - Evil's `SPC w r` (`evil-window-rotate-downwards`) with the sidebar open can leave
   two pairs showing the same session (Evil's side-window save/restore fails to put
   chat states into input-sized windows); the pairs stay consistent.

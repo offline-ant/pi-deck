@@ -4,8 +4,8 @@
 
 ;;; Commentary:
 
-;; The root overview reports the server this Emacs runs (name, socket, PID,
-;; clients, frames, uptime) and the Pi orchestration host.  Restarting saves
+;; `pi-deck-daemon-info' reports the server this Emacs runs (name, socket,
+;; PID, clients, frames, uptime) and the Pi orchestration host.  Restarting saves
 ;; the deck state, starts a detached helper that waits for this process to
 ;; exit and then runs `pi-deck-restart-command', and exits.  The new daemon
 ;; restores the saved spaces and sessions like any start of the server
@@ -50,7 +50,7 @@ An absolute `server-name' is the file itself."
   (file-name-nondirectory server-name))
 
 (defun pi-deck--client-frames ()
-  "Return frames that can show tabs: all frames except a daemon's own frame."
+  "Return frames that can show spaces: all frames except a daemon's own frame."
   (if (daemonp)
       (cl-remove-if (lambda (frame)
                       (equal (terminal-name (frame-terminal frame)) "initial_terminal"))
@@ -86,6 +86,13 @@ An absolute `server-name' is the file itself."
                (_ "echo area")))
      (format "state %s%s" (abbreviate-file-name pi-deck-state-file)
              (if pi-deck--state-owner "" " (not owned: never restored or saved here)")))))
+
+;;;###autoload
+(defun pi-deck-daemon-info ()
+  "Describe this Emacs server and the Pi integration in a temporary buffer."
+  (interactive)
+  (with-output-to-temp-buffer "*pi-deck daemon*"
+    (princ (string-join (pi-deck-daemon-info-lines) "\n"))))
 
 (defun pi-deck-live-sessions ()
   "Return agents whose processes would die with this Emacs."

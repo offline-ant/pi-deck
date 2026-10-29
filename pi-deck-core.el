@@ -8,8 +8,8 @@
 ;; terminal buffers.  Each agent has a base state (idle, working, blocked,
 ;; unknown) and a seen flag; an idle agent that worked while nobody was
 ;; looking is "done" until its buffer is shown.  Attention priority is
-;; blocked > done > working > idle > unknown, and rolls up to tabs and spaces
-;; as a maximum.  This file derives the state; observers subscribe to
+;; blocked > done > working > idle > unknown, and rolls up to spaces as a
+;; maximum.  This file derives the state; observers subscribe to
 ;; `pi-deck-agent-change-functions' and `pi-deck-update-hook'.
 
 ;;; Code:
@@ -21,7 +21,7 @@
 (declare-function pi-orchestration-targets "pi-orchestration" ())
 
 (defgroup pi-deck nil
-  "Herdr-style spaces, tabs and agent overview for Pi sessions."
+  "Spaces and an agent sidebar for Pi sessions."
   :group 'tools
   :prefix "pi-deck-")
 
@@ -32,7 +32,7 @@
   :group 'pi-deck)
 
 (defcustom pi-deck-include-shells t
-  "Whether ghostel terminal buffers are agents in the overview."
+  "Whether ghostel terminal buffers are agents in the sidebar."
   :type 'boolean
   :group 'pi-deck)
 
@@ -223,7 +223,7 @@ Interactive forks are peers, not workers."
 
 (defun pi-deck-agent-visible-p (agent)
   "Return non-nil when AGENT is shown in a window of a visible frame.
-Only the selected tab of a frame has windows, so this means the user can see
+Only the layout a frame shows has windows, so this means the user can see
 it now."
   (cl-some (lambda (buffer)
              (and (buffer-live-p buffer) (get-buffer-window buffer 'visible)))
@@ -415,7 +415,7 @@ split or hold panes."
     (select-window (pi-deck--main-window))))
 
 (defun pi-deck--single-window ()
-  "Reduce the tab to one plain window besides side windows and select it.
+  "Reduce the layout to one plain window besides side windows and select it.
 A Pilish chat and input pair becomes its chat window alone."
   (pi-deck--select-ordinary-window)
   (select-window (pilish-dissolve-window-pair (selected-window)))

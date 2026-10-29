@@ -7,14 +7,15 @@
 ;; Every pane showing an agent (a Pilish chat or a ghostel terminal) gets a
 ;; title bar in its header line:
 ;;
-;;   ◐ main · claude-opus-5-5 · 41%                  [↑] [⑂] [⤢] [✕]
+;;   ◐ main · claude-opus-5-5 · 41%              [↑] [↓] [⑂] [⤢] [✕]
 ;;
 ;; status icon, name, then the model and context use for Pi agents or the
 ;; exit status for terminals; [↑] toggles whether the session's chat jumps
 ;; to the start of the final answer when a turn ends
-;; (`pilish-toggle-jump-to-answer'; dimmed when off), [⑂] forks a Pi
-;; session (`pi-deck-fork-agent'), [⤢] zooms the pane and [✕] closes it
-;; Herdr-style (see `pi-deck-close-pane').  The segment is put in front of
+;; (`pilish-toggle-jump-to-answer'; dimmed when off), [↓] jumps a Pi chat
+;; to its latest output and follows it (like `G'), [⑂] forks a Pi session
+;; (`pi-deck-fork-agent'), [⤢] zooms the pane and [✕] hides it; the agent
+;; keeps running (see `pi-deck-hide-pane').  The segment is put in front of
 ;; whatever header line the buffer already has; Pilish's input buffers keep
 ;; their own header line.
 
@@ -58,16 +59,24 @@ See `pilish-jump-to-answer'."
   (pilish-toggle-jump-to-answer (window-buffer (pi-deck--header-window event)))
   (force-mode-line-update t))
 
+(defun pi-deck-header-latest (event)
+  "Jump the chat whose title bar EVENT clicked to its latest output.
+Point goes to the end, so Pilish follows new output again, as after `G'."
+  (interactive "e")
+  (with-selected-window (pi-deck--header-window event)
+    (goto-char (point-max))
+    (recenter -1)))
+
 (defun pi-deck-header-fork (event)
   "Fork the Pi agent whose title bar EVENT clicked; see `pi-deck-fork-agent'."
   (interactive "e")
   (with-current-buffer (window-buffer (pi-deck--header-window event))
     (pi-deck-fork-agent (pi-deck-agent (current-buffer)))))
 
-(defun pi-deck-header-close (event)
-  "Close the pane whose title bar EVENT clicked; see `pi-deck-close-pane'."
+(defun pi-deck-header-hide (event)
+  "Hide the pane whose title bar EVENT clicked; see `pi-deck-hide-pane'."
   (interactive "e")
-  (pi-deck-close-pane (pi-deck--header-window event) event))
+  (pi-deck-hide-pane (pi-deck--header-window event)))
 
 (defun pi-deck--header-button (label command help &optional off)
   "Return header line button LABEL running COMMAND, with HELP.
@@ -113,15 +122,18 @@ after TITLE stay visible however long the name and details are."
                                             "Jump to the answer when a turn ends: off\nmouse-1: turn on")
                                           (not on)))
                                        " "
+                                       (pi-deck--header-button "[↓]" #'pi-deck-header-latest
+                                                               "mouse-1: jump to the latest output and follow it")
+                                       " "
                                        (pi-deck--header-button "[⑂]" #'pi-deck-header-fork
-                                                               "mouse-1: fork this session (new tab)")
+                                                               "mouse-1: fork this session")
                                        " ")
                              "")
                            (pi-deck--header-button "[⤢]" #'pi-deck-header-zoom
                                                    "mouse-1: zoom this pane (again: restore)")
                            " "
-                           (pi-deck--header-button "[✕]" #'pi-deck-header-close
-                                                   "mouse-1: close this pane; stops its agent unless shown elsewhere")
+                           (pi-deck--header-button "[✕]" #'pi-deck-header-hide
+                                                   "mouse-1: hide this pane; the agent keeps running")
                            " ")))
       (string-replace
        "%" "%%"

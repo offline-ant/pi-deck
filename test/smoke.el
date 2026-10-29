@@ -8,10 +8,13 @@
 ;; drives a real shell pane (the user's default shell with ghostel's shell
 ;; integration) through idle, working and exit, then a real Pi RPC session
 ;; (faux provider only) through working, done, blocked and answered states
-;; and saves the deck.  test/smoke.sh then
+;; and saves the deck.  With a client frame, the agent opens panels: beside
+;; it when it is on screen, only listed in the sidebar when hidden.
+;; test/smoke.sh then
 ;; restarts the daemon through `pi-deck-restart-daemon'; phase 2 checks that
 ;; the space and session were restored from the session file, with the
-;; Emacs orchestration environment, and still work.  Phase 3 checks the same
+;; Emacs orchestration environment, with the space selected last, and
+;; still work.  Phase 3 checks the same
 ;; after a plain `kill-emacs' and a fresh daemon start.
 
 ;;; Code:
@@ -69,7 +72,8 @@
     (unless (equal (pi-deck-agent-model agent) "one")
       (error "Unexpected model %S" (pi-deck-agent-model agent)))
     ;; Hide the session so finishing makes it done and notifies.
-    (pi-deck-root-show)
+    (pi-deck-hide-pane (get-buffer-window chat))
+    (when (get-buffer-window chat) (error "Hiding left the session on screen"))
     (pi-deck-smoke--submit chat "hello deck")
     (pi-deck-smoke--wait "a finished reply"
                          (lambda () (and (eq (pi-deck-agent-state agent) 'idle)
@@ -85,10 +89,10 @@
       (error "Unexpected detail %S" (pi-deck-agent-detail agent)))
     (unless (member "main needs attention" pi-deck-smoke-notifications)
       (error "No attention notification: %S" pi-deck-smoke-notifications))
-    (with-current-buffer (pi-deck-overview-buffer)
-      (pi-deck-overview-refresh)
-      (unless (string-match-p "◉ blocked  main" (buffer-string))
-        (error "Overview lacks the blocked agent:\n%s" (buffer-string))))
+    (with-current-buffer (pi-deck-sidebar-buffer)
+      (pi-deck-sidebar-refresh)
+      (unless (string-match-p "◉ main" (buffer-string))
+        (error "Sidebar lacks the blocked agent:\n%s" (buffer-string))))
     ;; Jumping focuses the inline question; pressing its Yes button answers.
     (pi-deck-jump agent)
     (with-current-buffer chat
@@ -108,7 +112,7 @@
 (defun pi-deck-smoke-panels (suffix)
   "Let the real agent open panels; check pi-deck shows them in a client frame.
 Panel names end in SUFFIX: Pi's panel names are global to the machine."
-  (let* ((below (concat "below-" suffix))
+  (let* ((beside (concat "beside-" suffix))
          (aside (concat "aside-" suffix))
          (frame (or (car (pi-deck--client-frames)) (error "No client frame")))
          (agent (or (cl-find-if (lambda (agent) (equal (pi-deck-agent-session-name agent) "main"))
@@ -116,48 +120,52 @@ Panel names end in SUFFIX: Pi's panel names are global to the machine."
                     (error "No main agent")))
          (chat (pi-deck-agent-buffer agent)))
     (with-selected-frame frame
-      ;; The parent is on screen: the panel opens below its pane, unfocused.
+      ;; The parent is on screen and its pane is wide: the panel opens to its
+      ;; right, unfocused.
       (pi-deck-reveal agent)
       (let ((focus (window-buffer (selected-window))))
-        (pi-deck-smoke--submit chat (concat "open panel " below))
-        (pi-deck-smoke--wait "panel below the agent"
-                             (lambda () (let ((panel (pi-deck-smoke--panel-buffer below)))
+        (pi-deck-smoke--submit chat (concat "open panel " beside))
+        (pi-deck-smoke--wait "panel beside the agent"
+                             (lambda () (let ((panel (pi-deck-smoke--panel-buffer beside)))
                                           (and panel (get-buffer-window panel frame)))))
-        (let* ((panel (pi-deck-smoke--panel-buffer below))
+        (let* ((panel (pi-deck-smoke--panel-buffer beside))
                (window (get-buffer-window panel frame)))
           (unless (eq (window-buffer (selected-window)) focus) (error "The panel took focus"))
-          (unless (< (window-pixel-top (get-buffer-window chat frame)) (window-pixel-top window))
-            (error "The panel is not below its agent"))
+          (unless (< (window-pixel-left (get-buffer-window chat frame)) (window-pixel-left window))
+            (error "The panel is not right of its agent"))
           (unless (eq (pi-deck-agent-parent (pi-deck-agent panel)) chat)
             (error "The panel is not linked to its agent"))
-          (with-current-buffer (pi-deck-overview-buffer t)
-            (pi-deck-overview-refresh)
-            (unless (string-match-p (concat "main *✕\n +[^\n]*" below " *✕") (buffer-string))
+          (with-current-buffer (pi-deck-sidebar-buffer)
+            (pi-deck-sidebar-refresh)
+            (unless (string-match-p (concat "main[^\n]*✕\n +[^\n]*" beside "[^\n]*✕")
+                                    (buffer-string))
               (error "The sidebar lacks the panel under its agent:\n%s" (buffer-string)))))
         (pi-deck-smoke--wait "turn end" (lambda () (eq (pi-deck-agent-state agent) 'idle)))
-        (pi-deck-smoke--submit chat (concat "close panel " below))
+        (pi-deck-smoke--submit chat (concat "close panel " beside))
         (pi-deck-smoke--wait "panel window removed"
-                             (lambda () (and (null (pi-deck-smoke--panel-buffer below))
+                             (lambda () (and (null (pi-deck-smoke--panel-buffer beside))
                                              (not (cl-find-if
                                                    (lambda (window)
                                                      (string-prefix-p "pi-panel:" (buffer-name (window-buffer window))))
                                                    (window-list frame 'no-minibuf)))))))
       (pi-deck-smoke--wait "turn end" (lambda () (eq (pi-deck-agent-state agent) 'idle)))
-      ;; The parent is hidden: the panel gets a background tab in its space.
-      (pi-deck-root-show)
-      (let ((tabs (length (pi-deck--tabs frame))))
+      ;; The parent is hidden: the panel is only listed, in its space.
+      (pi-deck-hide-pane (get-buffer-window chat frame))
+      (let ((tabs (length (pi-deck--tabs frame)))
+            (windows (window-list frame 'no-minibuf)))
         (pi-deck-smoke--submit chat (concat "open panel " aside))
-        (pi-deck-smoke--wait "panel tab" (lambda () (= (length (pi-deck--tabs frame)) (1+ tabs))))
-        (unless (pi-deck-root-tab-p (tab-bar--current-tab-find nil frame))
-          (error "The panel tab took focus"))
-        (unless (cl-find-if (lambda (tab) (and (equal (pi-deck--tab-group tab) "smoke")
-                                               (memq (pi-deck-smoke--panel-buffer aside)
-                                                     (pi-deck--tab-buffers tab frame))))
-                            (pi-deck--tabs frame))
-          (error "The panel tab is not in the agent's space"))
+        (pi-deck-smoke--wait "hidden panel" (lambda () (pi-deck-smoke--panel-buffer aside)))
         (pi-deck-smoke--wait "turn end" (lambda () (eq (pi-deck-agent-state agent) 'idle)))
+        (let ((panel (pi-deck-smoke--panel-buffer aside)))
+          (when (get-buffer-window panel frame) (error "The hidden agent's panel was shown"))
+          (unless (equal (window-list frame 'no-minibuf) windows)
+            (error "The hidden agent's panel changed the layout"))
+          (unless (= (length (pi-deck--tabs frame)) tabs) (error "The panel added a tab"))
+          (unless (equal (pi-deck-agent-space (pi-deck-agent panel)) "smoke")
+            (error "The panel is not in the agent's space")))
         (pi-deck-smoke--submit chat (concat "close panel " aside))
-        (pi-deck-smoke--wait "panel tab closed" (lambda () (= (length (pi-deck--tabs frame)) tabs))))
+        (pi-deck-smoke--wait "hidden panel closed"
+                             (lambda () (null (pi-deck-smoke--panel-buffer aside)))))
       (pi-deck-smoke--wait "turn end" (lambda () (eq (pi-deck-agent-state agent) 'idle))))
     "PASS-PANELS"))
 
@@ -180,6 +188,7 @@ Checks that every restored Pi process got the Emacs orchestration
 environment, which needs the server running before the restore."
   (pi-deck-smoke--wait "restore to finish" (lambda () (null pi-deck--restoring)))
   (unless (pi-deck-space "smoke") (error "Space was not restored"))
+  (unless (equal pi-deck--last-space "smoke") (error "The current space was not restored"))
   (let* ((agent (or (cl-find-if (lambda (agent) (equal (pi-deck-agent-session-name agent) "main"))
                                 (pi-deck-agents))
                     (error "Session was not restored: %S" (mapcar #'pi-deck-agent-name (pi-deck-agents)))))

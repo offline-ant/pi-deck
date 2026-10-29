@@ -7,11 +7,10 @@
 ;; Pi's Emacs orchestration host starts workers (Pilish sessions), forks
 ;; (Pilish sessions placed as "interactive-fork") and panels (terminals) as
 ;; buffers no window shows.  pi-deck links them to their parent agent and
-;; places them in the parent's space as they start: panels below the
-;; parent's pane when that is on screen, else in a new background tab;
-;; forks in a new background tab.  Workers get no tab: they are listed
-;; under their parent and shown beside it on demand.  Once a worker, fork or
-;; panel closes, the windows and tabs showing only it go too.
+;; its space: a panel opens in half of the parent's pane when that is on
+;; screen; forks, workers and panels whose parent is hidden are listed in
+;; the sidebar and shown on demand.  Once a worker, fork or panel closes,
+;; the panes showing it go too.
 ;;
 ;; Workers are ephemeral: the host kills their buffers when they finish.
 ;; Their session files remain, so each closed worker is remembered under its
@@ -29,22 +28,15 @@
 
 (defcustom pi-deck-show-panels t
   "Whether terminals (panels) started by an agent are shown at once.
-A panel opens below its parent agent's pane when that pane is on screen,
-otherwise in a new tab of the parent's space, without taking focus."
+A panel takes half of its parent agent's pane, without taking focus, when
+that pane is on screen; otherwise it is only listed in the sidebar."
   :type 'boolean
-  :group 'pi-deck)
-
-(defcustom pi-deck-panel-height 12
-  "Height in lines of a panel window opened below its parent's pane."
-  :type 'natnum
   :group 'pi-deck)
 
 (defcustom pi-deck-finished-workers-limit 100
   "Maximum number of closed workers remembered across all parents."
   :type 'natnum
   :group 'pi-deck)
-
-(defvar pi-deck-sidebar-buffer-name)
 
 (defvar pi-deck--finished-workers nil
   "Closed orchestration Pi workers, newest first.
@@ -64,70 +56,37 @@ Plists with :name, :parent (the parent agent's buffer), :session-file and
   (let ((frames (pi-deck--client-frames)))
     (if (memq (selected-frame) frames) (selected-frame) (car frames))))
 
-(defun pi-deck--panel-space (buffer parent)
-  "Return the space of panel BUFFER whose parent agent is PARENT (or nil)."
-  (let ((agent (pi-deck-agent buffer)))
-    (or (and agent (pi-deck-agent-space agent))
-        (and parent (pi-deck-agent-space parent)))))
+(defun pi-deck--panel-direction (window)
+  "Return where a panel splits off WINDOW's pane, as Herdr does.
+`right' when the pane is at least twice as wide as it is high, else `below'."
+  (let ((pane (pi-deck--pane-of window)))
+    (if (>= (window-total-width pane) (* 2 (window-total-height pane))) 'right 'below)))
 
-(defun pi-deck--split-below (window)
-  "Split a panel window off the bottom of WINDOW, or return nil.
-The panel gets `pi-deck-panel-height' lines, or a third of WINDOW."
-  (let ((height (min pi-deck-panel-height
-                     (/ (window-total-height window) 3))))
-    (and (>= height window-min-height)
-         (ignore-errors (split-window window (- height) 'below)))))
-
-(defun pi-deck--panel-window-below (buffer parent)
-  "Show BUFFER below PARENT's pane in the selected tab; return the window.
-When that pane is too small, split the tab's main window instead.  Return
-nil when PARENT is not on screen or there is no room."
+(defun pi-deck--panel-window-beside (buffer parent)
+  "Show BUFFER in half of PARENT's pane in the selected frame; return the window.
+Return nil when PARENT is not on screen or its pane is too small to split."
   (when-let* ((parent-window (and parent (pi-deck--input-or-chat-window parent)))
-              (window (or (pi-deck--split-below (pi-deck--pane-of parent-window))
-                          (pi-deck--split-below (window-main-window)))))
+              (window (ignore-errors
+                        (pi-deck--split-pane parent-window
+                                             (pi-deck--panel-direction parent-window)))))
     (set-window-buffer window buffer)
     window))
 
-(defun pi-deck--background-tab (agent space)
-  "Open a tab of SPACE showing AGENT, then return to the selected tab."
-  (let ((original (tab-bar--current-tab-index)))
-    (pi-deck--new-tab-in-space (or space "other"))
-    (pi-deck--display-agent-in-window agent (selected-window))
-    (let ((new (tab-bar--current-tab-index)))
-      (tab-bar-select-tab (1+ (if (<= new original) (1+ original) original))))))
-
 (defun pi-deck-show-panel (buffer &optional parent-buffer frame)
-  "Show panel BUFFER of PARENT-BUFFER's agent in FRAME without selecting it.
+  "Show panel BUFFER beside PARENT-BUFFER's agent in FRAME without selecting it.
 FRAME defaults to the selected client frame.  Nothing happens when BUFFER is
-already shown there or no client frame exists."
+already shown there, the parent is not on screen or no client frame exists."
   (let ((frame (or frame (pi-deck--display-frame))))
     (when (and frame (buffer-live-p buffer) (not (get-buffer-window buffer frame)))
       (with-selected-frame frame
         (save-selected-window
-          (let ((parent (pi-deck-agent parent-buffer)))
-            (unless (pi-deck--panel-window-below buffer parent)
-              (pi-deck--background-tab (pi-deck--track buffer 'shell)
-                                       (pi-deck--panel-space buffer parent)))))
-        (pi-deck--schedule-update)))))
-
-(defun pi-deck-show-fork (chat &optional parent-buffer frame)
-  "Show the forked Pi session CHAT in a new tab of PARENT-BUFFER's space.
-The tab opens in FRAME (default the selected client frame) without being
-selected."
-  (let ((frame (or frame (pi-deck--display-frame)))
-        (agent (pi-deck--track chat 'pi)))
-    (when (and frame (buffer-live-p chat) (not (get-buffer-window chat frame)))
-      (with-selected-frame frame
-        (save-selected-window
-          (let ((parent (pi-deck-agent parent-buffer)))
-            (setf (pi-deck-agent-assigned-space agent) (and parent (pi-deck-agent-space parent)))
-            (pi-deck--background-tab agent (pi-deck-agent-assigned-space agent))))
+          (pi-deck--panel-window-beside buffer (pi-deck-agent parent-buffer)))
         (pi-deck--schedule-update)))))
 
 (defun pi-deck--on-target (id event)
-  "Refresh agents after orchestration target ID's EVENT; place new targets.
-Panels open beside their parent and forks in a tab of its space; workers
-are only listed."
+  "Refresh agents after orchestration target ID's EVENT; place new panels.
+Panels open beside their parent when it is on screen.  Forks belong to
+their parent's space; they and workers are only listed in the sidebar."
   (pi-deck-refresh)
   (when (eq event 'start)
     (when-let* ((target (pi-deck--target id))
@@ -136,9 +95,10 @@ are only listed."
       (cond
        ((and (equal (plist-get target :kind) "shell") pi-deck-show-panels)
         (run-at-time 0 nil #'pi-deck-show-panel buffer (plist-get target :parent)))
-       ((and (equal (plist-get target :kind) "pi")
-             (equal (plist-get target :placement) "interactive-fork"))
-        (run-at-time 0 nil #'pi-deck-show-fork buffer (plist-get target :parent)))))))
+       ((equal (plist-get target :placement) "interactive-fork")
+        (when-let* ((parent (pi-deck-agent (plist-get target :parent))))
+          (setf (pi-deck-agent-assigned-space (pi-deck--track buffer 'pi))
+                (pi-deck-agent-space parent))))))))
 
 ;;;; Closing
 

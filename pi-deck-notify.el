@@ -85,7 +85,10 @@ is nil, and runs `pi-deck-notify-functions'."
   (when (and (or pi-deck-notify-shells (eq (pi-deck-agent-kind agent) 'pi))
              (not (pi-deck-agent-visible-p agent)))
     (let ((kind (cond ((and (eq new 'blocked) (not (eq old 'blocked))) 'blocked)
-                      ((and (eq new 'idle) (memq old '(working blocked))) 'finished))))
+                      ;; A worker's result goes to its parent, not to you.
+                      ((and (eq new 'idle) (memq old '(working blocked))
+                            (not (pi-deck-agent-worker-p agent)))
+                       'finished))))
       (when (memq kind pi-deck-notify-on)
         (let ((title (format "%s %s" (pi-deck-agent-name agent)
                              (if (eq kind 'blocked) "needs attention" "finished")))

@@ -5,7 +5,8 @@
 ;;; Commentary:
 
 ;; Batch tests with fake Pilish sessions (chat buffers owning pipe
-;; processes), real ghostel terminals and the real tab bar.  No Pi processes.
+;; processes), real ghostel terminals and real (hidden) tab-bar tabs
+;; holding the spaces' layouts.  No Pi processes.
 
 ;;; Code:
 
@@ -31,16 +32,17 @@
        (set-frame-size nil 80 25))))
 
 (defmacro pi-deck-test--with-deck (&rest body)
-  "Run BODY with a clean deck, tab bar and temporary state files."
+  "Run BODY with a clean deck, one ungrouped tab and temporary state files."
   (declare (indent 0))
   `(let* ((dir (make-temp-file "pi-deck-test-" t))
           (pi-deck-state-file (expand-file-name "state.eld" dir))
           (pi-deck-preferences-file (expand-file-name "preferences.eld" dir))
           (pi-deck--agents (make-hash-table :test 'eq))
           (pi-deck-spaces nil)
+          (pi-deck--layouts nil)
+          (pi-deck--last-space nil)
           (pi-deck-sidebar nil)
-          (pi-deck--pending-tabs nil)
-          (pi-deck--last-tabs nil)
+          (pi-deck-sidebar-width pi-deck-sidebar-width)
           (pi-deck-save-delay nil)
           ;; This Emacs owns the temporary state file; restores run at once.
           (pi-deck--state-claimed t)
@@ -57,6 +59,7 @@
           (pilish-extension-dialog-style 'minibuffer)
           (tab-bar-tabs-function #'tab-bar-tabs)
           (kill-buffer-query-functions nil))
+     (set-frame-parameter nil 'tabs nil)
      (unwind-protect
          (progn
            (pi-deck-mode 1)
@@ -102,6 +105,15 @@
 (defun pi-deck-test--phase (chat phase)
   "Apply Pilish activity PHASE in CHAT through its public hook."
   (with-current-buffer chat (pilish--set-activity-phase phase)))
+
+(defun pi-deck-test--main-windows ()
+  "Return the selected frame's live windows outside side windows."
+  (cl-remove-if (lambda (window) (window-parameter window 'window-side))
+                (window-list nil 'no-minibuf)))
+
+(defun pi-deck-test--in-dired-p (&optional window)
+  "Return non-nil when WINDOW (default selected) shows Dired."
+  (with-current-buffer (window-buffer window) (derived-mode-p 'dired-mode)))
 
 ;;;; Status model
 
@@ -199,49 +211,102 @@
       (should (eq (pi-deck-agent-state agent) 'idle))
       (should (string-match-p "exited 0" (pi-deck-agent-detail agent))))))
 
-;;;; Spaces and tabs
+;;;; Spaces and layouts
 
-(ert-deftest pi-deck-test-root-tab-is-first-and-pinned ()
-  (pi-deck-test--with-deck
-    (should (pi-deck-root-tab-p (car (tab-bar-tabs))))
-    (pi-deck-root)
-    (should (pi-deck-root-tab-p (tab-bar--current-tab-find)))
-    (should (eq (window-buffer) (get-buffer pi-deck-overview-buffer-name)))
-    (should-error (pi-deck-close-tab) :type 'user-error)
-    (tab-bar-close-tab 1)
-    (should (pi-deck-root-tab-p (car (tab-bar-tabs))))
-    (pi-deck-root)
-    (should-not (pi-deck-root-tab-p (tab-bar--current-tab-find)))))
-
-(ert-deftest pi-deck-test-spaces-and-tabs ()
+(ert-deftest pi-deck-test-spaces-have-one-hidden-layout-each ()
   (pi-deck-test--with-deck
     (let ((one (file-name-as-directory (expand-file-name "one" dir)))
           (two (file-name-as-directory (expand-file-name "two" dir))))
       (make-directory one) (make-directory two)
+      (should-not tab-bar-show)
+      (should-not (pi-deck-current-space))
+      ;; The first space takes the frame's ungrouped tab.
       (should (equal (pi-deck-create-space one) "one"))
+      (should (= (length (tab-bar-tabs)) 1))
       (should (equal (pi-deck-current-space) "one"))
       (should (equal (pi-deck-space-dir "one") one))
-      (pi-deck-new-tab "second")
+      (should (pi-deck-test--in-dired-p))
       (pi-deck-create-space two "two")
-      (should (equal (pi-deck-space-names) (list pi-deck-root-name "one" "two")))
-      ;; Tabs of a space stay together, after the root.
-      (should (equal (mapcar #'pi-deck--tab-group (tab-bar-tabs))
-                     (list pi-deck-root-name "one" "one" "two")))
+      (should (equal (pi-deck-space-names) '("one" "two")))
+      (should (equal (mapcar #'pi-deck--tab-group (tab-bar-tabs)) '("one" "two")))
+      (should (equal pi-deck--last-space "two"))
+      ;; Each space keeps its own layout; leaving one remembers it.
+      (split-window-right)
       (pi-deck-switch-space "one")
-      (should (equal (alist-get 'name (tab-bar--current-tab-find)) "second"))
-      (pi-deck-next-tab)
-      (should (equal (tab-bar--current-tab-index) 1))
-      (pi-deck-next-tab)
-      (should (equal (alist-get 'name (tab-bar--current-tab-find)) "second"))
-      (pi-deck-select-tab 1)
-      (should (equal (tab-bar--current-tab-index) 1))
-      (pi-deck-rename-space "uno")
-      (should (equal (pi-deck-current-space) "uno"))
-      (should (equal (pi-deck-space-dir "uno") one))
-      (pi-deck-close-space "uno")
-      (should-not (pi-deck-space "uno"))
-      (should (equal (mapcar #'pi-deck--tab-group (tab-bar-tabs))
-                     (list pi-deck-root-name "two"))))))
+      (should (one-window-p))
+      (should (equal pi-deck--last-space "one"))
+      (should (assoc "two" pi-deck--layouts))
+      (pi-deck-switch-space "two")
+      (should (= (length (window-list nil 'no-minibuf)) 2))
+      (should (= (length (tab-bar-tabs)) 2))
+      (pi-deck-rename-space "deux")
+      (should (equal (pi-deck-current-space) "deux"))
+      (should (equal (pi-deck-space-dir "deux") two))
+      (should (equal pi-deck--last-space "deux"))
+      (should (assoc "deux" pi-deck--layouts))
+      (should-not (assoc "two" pi-deck--layouts))
+      ;; Closing a space drops its layout everywhere.
+      (pi-deck-close-space "deux")
+      (should-not (pi-deck-space "deux"))
+      (should-not (assoc "deux" pi-deck--layouts))
+      (should (equal (mapcar #'pi-deck--tab-group (tab-bar-tabs)) '("one")))
+      (should (equal (pi-deck-current-space) "one"))
+      (should (equal pi-deck--last-space "one"))
+      ;; Without spaces the frame keeps one ungrouped tab.
+      (pi-deck-close-space "one")
+      (should (= (length (tab-bar-tabs)) 1))
+      (should-not (pi-deck-current-space))
+      (should-not pi-deck--last-space))))
+
+(ert-deftest pi-deck-test-layouts-seed-frames-without-the-space ()
+  (pi-deck-test--with-large-frame
+   (pi-deck-test--with-deck
+    (pi-deck-create-space dir "space")
+    (let ((a (pi-deck-test--session dir "a"))
+          (b (pi-deck-test--session dir "b")))
+      (pi-deck--display-agent-in-window (pi-deck-agent a) (selected-window))
+      (pi-deck-show-beside (pi-deck-agent b))
+      (pi-deck-sidebar-toggle)
+      (pi-deck--remember-current-layout)
+      ;; The sidebar is no part of a layout.
+      (should-not (member pi-deck-sidebar-buffer-name
+                          (window-state-buffers (cdr (assoc "space" pi-deck--layouts)))))
+      ;; A new frame: one ungrouped tab with one window.
+      (set-frame-parameter nil 'tabs nil)
+      (pi-deck--single-window)
+      (switch-to-buffer "*scratch*")
+      (should-not (pi-deck-current-space))
+      (pi-deck-setup-frame)
+      (should (equal (pi-deck-current-space) "space"))
+      (should (= (length (tab-bar-tabs)) 1))
+      (should (pilish-window-pair (get-buffer-window a)))
+      (should (pilish-window-pair (get-buffer-window b)))
+      (should (get-buffer-window pi-deck-sidebar-buffer-name))))))
+
+(ert-deftest pi-deck-test-new-frames-open-the-last-space ()
+  (pi-deck-test--with-deck
+    (let ((two (make-temp-file "pi-deck-two-" t)))
+      ;; Nothing to open yet.
+      (pi-deck-setup-frame)
+      (should-not (pi-deck-current-space))
+      (pi-deck-create-space dir "one")
+      (pi-deck-create-space two "two")
+      (pi-deck-switch-space "one")
+      ;; A new frame shows the space selected last.
+      (set-frame-parameter nil 'tabs nil)
+      (pi-deck-setup-frame)
+      (should (equal (pi-deck-current-space) "one"))
+      (should (= (length (tab-bar-tabs)) 1))
+      ;; A frame already showing a space keeps it.
+      (pi-deck-switch-space "two")
+      (setq pi-deck--last-space "one")
+      (pi-deck-setup-frame)
+      (should (equal (pi-deck-current-space) "two"))
+      ;; A closing frame leaves its layout to later frames.
+      (set-window-buffer (split-window-right) "*scratch*")
+      (pi-deck-remember-frame (selected-frame))
+      (should (member "*scratch*" (window-state-buffers (cdr (assoc "two" pi-deck--layouts)))))
+      (delete-directory two t))))
 
 (ert-deftest pi-deck-test-agent-space-resolution-and-rollup ()
   (pi-deck-test--with-deck
@@ -259,49 +324,47 @@
         (should (equal (pi-deck-agent-space child) "proj"))
         (pi-deck-test--phase (pi-deck-agent-buffer child) "thinking")
         (should (eq (cdr (assoc "proj" (pi-deck-space-statuses))) 'working))
-        ;; A tab displaying an agent determines the tab's status, not the
-        ;; agent's home space.
-        (switch-to-buffer (pi-deck-agent-buffer child))
-        (should (eq (pi-deck-tab-status (tab-bar--current-tab-find)) 'working))
         (pi-deck-create-space (make-temp-file "pi-deck-elsewhere-" t) "elsewhere")
         (switch-to-buffer (pi-deck-agent-buffer by-dir))
         (should (equal (pi-deck-agent-space by-dir) "proj"))
-        ;; Only an agent nothing else places takes a displaying tab's space.
+        ;; Only an agent nothing else places takes the space showing it.
         (let ((loose (pi-deck-agent (pi-deck-test--session (make-temp-file "pi-deck-loose-" t) "loose"))))
           (should-not (pi-deck-agent-space loose))
           (switch-to-buffer (pi-deck-agent-buffer loose))
           (should (equal (pi-deck-agent-space loose) "elsewhere")))))))
 
 (ert-deftest pi-deck-test-new-agent-and-shell-in-space ()
-  (pi-deck-test--with-deck
+  (pi-deck-test--with-large-frame
+   (pi-deck-test--with-deck
     (pi-deck-create-space dir "space")
     (let (started)
       (cl-letf (((symbol-function 'pilish-start-session)
                  (lambda (directory name &rest _)
                    (push (list directory name) started)
                    (pi-deck-test--session directory name))))
+        ;; The first agent takes the space's only pane.
         (let ((agent (pi-deck-new-agent nil)))
           (should (equal (car started) (list (file-name-as-directory dir) "1")))
           (should (eq (window-buffer) (pilish-session-input-buffer (pi-deck-agent-buffer agent))))
-          (should (get-buffer-window (pi-deck-agent-buffer agent)))
           (should (equal (pi-deck-agent-space agent) "space"))
-          ;; A second agent gets a tab of its own in the space.
+          (should (= (length (window-list nil 'no-minibuf)) 2))
+          ;; A second agent opens beside it in the same layout.
           (let ((second (pi-deck-new-agent "two")))
-            (should (= (length (pi-deck--space-tab-entries "space")) 2))
-            (should (= (length (window-list nil 'no-minibuf)) 2))
-            (should-not (get-buffer-window (pi-deck-agent-buffer agent)))
-            (should (equal (alist-get 'name (tab-bar--current-tab-find)) "two"))
+            (should (= (length (tab-bar-tabs)) 1))
+            (should (= (length (window-list nil 'no-minibuf)) 4))
+            (should (pilish-window-pair (get-buffer-window (pi-deck-agent-buffer agent))))
             (should (eq (window-buffer)
                         (pilish-session-input-buffer (pi-deck-agent-buffer second))))))))
-    (let ((shell (pi-deck-new-shell t)))
+    (let ((shell (pi-deck-new-shell)))
       (should (eq (window-buffer) (pi-deck-agent-buffer shell)))
       (should (equal (pi-deck-agent-assigned-space shell) "space"))
+      (should (= (length (window-list nil 'no-minibuf)) 5))
       (pi-deck-zoom)
       (should (one-window-p))
       (pi-deck-zoom)
-      (should-not (one-window-p)))))
+      (should-not (one-window-p))))))
 
-(ert-deftest pi-deck-test-new-agent-from-root-uses-a-space ()
+(ert-deftest pi-deck-test-new-agent-outside-a-space-reads-one ()
   (pi-deck-test--with-deck
     (let ((other (make-temp-file "pi-deck-other-" t)) started)
       (pi-deck-create-space other "other-space")
@@ -311,24 +374,23 @@
                    (push (list directory name) started)
                    (pi-deck-test--session directory name)))
                 ((symbol-function 'read-string) (lambda (&rest _) "")))
-        ;; The overview starts agents in the space at point and shows them.
-        (pi-deck-root-show)
-        (with-current-buffer (pi-deck-overview-buffer)
-          (pi-deck-overview-refresh)
+        ;; The sidebar starts agents in the space at point and shows them.
+        (with-current-buffer (pi-deck-sidebar-buffer)
+          (pi-deck-sidebar-refresh)
           (goto-char (point-min))
           (search-forward "other-space")
-          (pi-deck-overview-new-agent))
+          (pi-deck-sidebar-new-agent))
         (should (equal (car started) (list (file-name-as-directory other) "1")))
         (should (equal (pi-deck-current-space) "other-space"))
-        ;; Elsewhere on the root tab, the space is read first.
-        (pi-deck-root-show)
+        ;; A frame showing no space reads the space first.
+        (set-frame-parameter nil 'tabs nil)
         (cl-letf (((symbol-function 'completing-read) (lambda (&rest _) "space")))
           (call-interactively #'pi-deck-new-agent))
         (should (equal (car started) (list (file-name-as-directory dir) "1")))
         (should (equal (pi-deck-current-space) "space"))
         ;; The picker lists the spaces and a "New space…" entry, which
         ;; creates a space for a picked directory.
-        (pi-deck-root-show)
+        (set-frame-parameter nil 'tabs nil)
         (let ((fresh (make-temp-file "pi-deck-fresh-" t)) offered)
           (cl-letf (((symbol-function 'completing-read)
                      (lambda (prompt table &rest _)
@@ -394,6 +456,8 @@
               (should read-dir))))
       (delete-directory root t))))
 
+;;;; Panes
+
 (ert-deftest pi-deck-test-panes-keep-chat-and-input-together ()
   (pi-deck-test--with-deck
     (pi-deck-create-space dir "space")
@@ -419,39 +483,37 @@
           (pi-deck-zoom)
           (should (= (length (window-list nil 'no-minibuf)) 3)))))))
 
-(ert-deftest pi-deck-test-two-agents-side-by-side-stay-paired ()
+(ert-deftest pi-deck-test-hiding-panes-keeps-agents ()
   (pi-deck-test--with-large-frame
    (pi-deck-test--with-deck
     (pi-deck-create-space dir "space")
-    (cl-letf (((symbol-function 'pilish-start-session)
-               (lambda (directory name &rest _) (pi-deck-test--session directory name))))
-      (let* ((a (pi-deck-new-agent "a"))
-             (b (pi-deck-new-agent "b"))
-             (chat-a (pi-deck-agent-buffer a))
-             (chat-b (pi-deck-agent-buffer b)))
-        ;; B has its own tab; shown beside A in A's tab, both stay pairs.
-        (pi-deck-select-tab 1)
-        (pi-deck-show-beside b)
-        (should (pilish-window-pair (get-buffer-window chat-a)))
-        (should (pilish-window-pair (get-buffer-window chat-b)))
-        (should-not (eq (window-parent (get-buffer-window chat-a))
-                        (window-parent (get-buffer-window chat-b))))
-        ;; A shell takes the place of the whole pair it is opened in.
-        (select-window (get-buffer-window (pilish-session-input-buffer chat-b)))
-        (pi-deck-new-shell)
-        (should-not (get-buffer-window chat-b))
-        (should-not (get-buffer-window (pilish-session-input-buffer chat-b)))
-        (should (pilish-window-pair (get-buffer-window chat-a)))
-        ;; Closing a pane closes the chat with its input and stops A, which
-        ;; nothing else shows; B lives on in its own tab.
-        (let ((input-a (pilish-session-input-buffer chat-a)))
-          (select-window (get-buffer-window chat-a))
-          (pi-deck-close-pane)
-          (should-not (buffer-live-p chat-a))
-          (should-not (get-buffer-window input-a))
-          (should (buffer-live-p chat-b))))))))
+    (let* ((a (pi-deck-test--session dir "a"))
+           (b (pi-deck-test--session dir "b"))
+           (shell (pi-deck-start-shell dir "shell:space" '("/bin/sh" "-c" "read line"))))
+      (pi-deck-refresh)
+      (pi-deck--display-agent-in-window (pi-deck-agent a) (selected-window))
+      (pi-deck-show-beside (pi-deck-agent b))
+      (should (pilish-window-pair (get-buffer-window a)))
+      (should (pilish-window-pair (get-buffer-window b)))
+      ;; A terminal takes the place of the whole pair it is shown in.
+      (pi-deck--display-agent-in-window (pi-deck-agent shell) (get-buffer-window b))
+      (should-not (get-buffer-window b))
+      (should-not (get-buffer-window (pilish-session-input-buffer b)))
+      (should (pilish-window-pair (get-buffer-window a)))
+      ;; Hiding a pane hides a chat with its input; the agent runs on.
+      (pi-deck-hide-pane (get-buffer-window a))
+      (should-not (get-buffer-window a))
+      (should-not (get-buffer-window (pilish-session-input-buffer a)))
+      (should (buffer-live-p a))
+      (should (pi-deck-agent a))
+      ;; The only pane shows the space's directory instead.
+      (select-window (get-buffer-window shell))
+      (pi-deck-hide-pane)
+      (should (one-window-p))
+      (should (pi-deck-test--in-dired-p))
+      (should (process-live-p (get-buffer-process shell)))))))
 
-(ert-deftest pi-deck-test-repair-tab-rebuilds-pairs ()
+(ert-deftest pi-deck-test-repair-panes-rebuilds-pairs ()
   (pi-deck-test--with-deck
     (pi-deck-create-space dir "space")
     (let* ((chat (pi-deck-test--session dir "a"))
@@ -459,82 +521,135 @@
       (pi-deck--display-agent-in-window (pi-deck-agent chat) (selected-window))
       (delete-window (get-buffer-window input))
       (should-not (get-buffer-window input))
-      (pi-deck-repair-tab)
+      (pi-deck-repair-panes)
       (should (eq (cdr (pilish-window-pair (get-buffer-window chat)))
                   (get-buffer-window input)))
       ;; An input shown alone gets its chat back above it.
       (pi-deck--single-window)
       (switch-to-buffer input)
-      (pi-deck-repair-tab)
+      (pi-deck-repair-panes)
       (should (eq (car (pilish-window-pair (selected-window))) (get-buffer-window chat))))))
 
-(ert-deftest pi-deck-test-reveal-hidden-worker-splits-its-space ()
-  (pi-deck-test--with-deck
-    (pi-deck-create-space dir "space")
-    (let* ((parent (pi-deck-agent (pi-deck-test--session dir "parent")))
-           (worker (pi-deck-agent (pi-deck-test--session "/tmp/" "worker"))))
-      (setf (pi-deck-agent-parent worker) (pi-deck-agent-buffer parent))
-      (pi-deck-root-show)
-      (pi-deck-jump worker)
-      (should (equal (pi-deck-current-space) "space"))
-      (should (get-buffer-window (pi-deck-agent-buffer worker)))
-      ;; The small batch frame leaves no room for an input window.
-      (should (eq (pilish-session-chat-buffer (window-buffer)) (pi-deck-agent-buffer worker))))))
+(ert-deftest pi-deck-test-reveal-focuses-switches-or-replaces ()
+  (pi-deck-test--with-large-frame
+   (pi-deck-test--with-deck
+    (let ((two (make-temp-file "pi-deck-two-" t)))
+      (pi-deck-create-space two "two")
+      (pi-deck-create-space dir "space")
+      (let* ((parent (pi-deck-agent (pi-deck-test--session dir "parent")))
+             (worker (pi-deck-agent (pi-deck-test--session "/tmp/" "worker")))
+             (other (pi-deck-agent (pi-deck-test--session dir "other")))
+             (far (pi-deck-agent (pi-deck-test--session two "far")))
+             (shown (lambda (agent) (get-buffer-window (pi-deck-agent-buffer agent)))))
+        (setf (pi-deck-agent-parent worker) (pi-deck-agent-buffer parent)
+              (pi-deck-agent-target worker) "t-1")
+        (pi-deck--display-agent-in-window parent (selected-window))
+        ;; A worker opens beside its parent on screen, focused.
+        (pi-deck-reveal worker)
+        (should (funcall shown parent))
+        (should (eq (pilish-session-chat-buffer (window-buffer)) (pi-deck-agent-buffer worker)))
+        ;; An agent on screen is just focused.
+        (let ((count (length (window-list nil 'no-minibuf))))
+          (pi-deck-reveal parent)
+          (should (= (length (window-list nil 'no-minibuf)) count))
+          (should (eq (pilish-session-chat-buffer (window-buffer)) (pi-deck-agent-buffer parent))))
+        ;; Others replace the most recently used pane.
+        (pi-deck-reveal other)
+        (should-not (funcall shown parent))
+        (should (funcall shown worker))
+        (should (eq (pilish-session-chat-buffer (window-buffer)) (pi-deck-agent-buffer other)))
+        ;; An agent of another space shows in that space's layout.
+        (pi-deck-reveal far)
+        (should (equal (pi-deck-current-space) "two"))
+        (should (funcall shown far))
+        (pi-deck-reveal other)
+        (should (equal (pi-deck-current-space) "space"))
+        (should (funcall shown worker)))
+      (delete-directory two t)))))
 
-;;;; Views
+;;;; Sidebar
 
-(ert-deftest pi-deck-test-overview-groups-filters-and-sorts ()
-  (pi-deck-test--with-deck
-    (pi-deck-create-space dir "space")
-    (let* ((parent (pi-deck-test--session dir "parent"))
-           (worker (pi-deck-test--session dir "worker"))
-           (idle (pi-deck-test--session dir "quiet")))
-      (switch-to-buffer parent)
-      (setf (pi-deck-agent-parent (pi-deck-agent worker)) parent)
-      (pi-deck-test--phase worker "thinking")
-      (with-current-buffer (pi-deck-overview-buffer)
-        (pi-deck-overview-refresh)
-        (let ((text (buffer-string)))
-          (should (string-match-p "▾ ◐ space (3)" text))
-          (should (string-match-p "tab parent" text))
-          (should (string-match-p "└ worker" text))
-          (should (string-match-p "not shown in a tab" text))
-          (should (string-match-p "faux-model" text)))
-        (pi-deck-overview-filter 'working)
-        (should (string-match-p "worker" (buffer-string)))
-        (should-not (string-match-p "quiet" (buffer-string)))
-        (pi-deck-overview-filter nil)
-        (pi-deck-overview-toggle-sort)
-        (goto-char (point-min))
-        (pi-deck-overview-next 1)
-        (should (eq (get-text-property (point) 'pi-deck-agent) (pi-deck-agent worker)))
-        ;; The worker is not shown in a tab; only its space is listed.
-        (should (string-match-p "  space\\'" (buffer-substring (line-beginning-position)
-                                                               (line-end-position))))
-        (should (string-match-p "parent .*  space/parent" (buffer-string)))
-        ;; Equal priorities list the most recent change first.
-        (pi-deck-overview-next 1)
-        (should (eq (get-text-property (point) 'pi-deck-agent) (pi-deck-agent idle)))))))
-
-(ert-deftest pi-deck-test-sidebar-follows-tabs ()
+(ert-deftest pi-deck-test-sidebar-follows-spaces ()
   (pi-deck-test--with-deck
     (pi-deck-create-space dir "space")
     (pi-deck-test--session dir "a")
     (pi-deck-sidebar-toggle)
     (should (get-buffer-window pi-deck-sidebar-buffer-name))
-    (should (buffer-local-value 'pi-deck-overview--compact (get-buffer pi-deck-sidebar-buffer-name)))
     (with-current-buffer pi-deck-sidebar-buffer-name
       (should (string-match-p "○ a" (buffer-string))))
-    (pi-deck-new-tab nil)
-    (pi-deck--on-tab-select)
+    (pi-deck-create-space (make-temp-file "pi-deck-two-" t) "two")
     (should (get-buffer-window pi-deck-sidebar-buffer-name))
     (pi-deck-sidebar-toggle)
+    (should-not (get-buffer-window pi-deck-sidebar-buffer-name))
+    (pi-deck-switch-space "space")
     (should-not (get-buffer-window pi-deck-sidebar-buffer-name))))
 
-(defun pi-deck-test--main-windows ()
-  "Return the selected frame's live windows outside side windows."
-  (cl-remove-if (lambda (window) (window-parameter window 'window-side))
-                (window-list nil 'no-minibuf)))
+(ert-deftest pi-deck-test-sidebar-width-is-shared-and-narrow-frames-hide-it ()
+  (pi-deck-test--with-large-frame
+   (pi-deck-test--with-deck
+    (setq pi-deck-sidebar-width 30)
+    (let ((sidebar (lambda () (get-buffer-window pi-deck-sidebar-buffer-name))))
+      (pi-deck-create-space dir "space")
+      (pi-deck-sidebar-toggle)
+      (should (= (window-total-width (funcall sidebar)) 30))
+      (pi-deck-create-space (make-temp-file "pi-deck-two-" t) "two")
+      (should (= (window-total-width (funcall sidebar)) 30))
+      ;; A drag: the sidebar changes width in an unchanged frame.
+      (let ((window (funcall sidebar)))
+        (window-resize window 6 t t)
+        (cl-letf (((symbol-function 'window-old-pixel-width)
+                   (lambda (window*)
+                     (if (eq window* window) 1 (window-pixel-width window*)))))
+          (pi-deck--on-window-size-change (selected-frame))))
+      (should (= pi-deck-sidebar-width 36))
+      ;; Every space's sidebar gets the new width.
+      (pi-deck-switch-space "space")
+      (should (= (window-total-width (funcall sidebar)) 36))
+      ;; Frames narrower than twice the width hide it; it comes back.
+      (set-frame-size nil 70 50)
+      (pi-deck--sidebar-sync)
+      (should-not (funcall sidebar))
+      (should pi-deck-sidebar)
+      (set-frame-size nil 160 50)
+      ;; A frame resize resyncs after the redisplay.
+      (cl-letf (((symbol-function 'window-old-pixel-width) (lambda (_) 1)))
+        (pi-deck--on-window-size-change (selected-frame)))
+      (should (pi-deck-test--wait (lambda () (funcall sidebar))))
+      (should (= (window-total-width (funcall sidebar)) 36))))))
+
+(ert-deftest pi-deck-test-sidebar-header-summary-and-items ()
+  (pi-deck-test--with-deck
+    (pi-deck-create-space dir "space")
+    (pi-deck-sidebar-toggle)
+    (let* ((sidebar (get-buffer-window pi-deck-sidebar-buffer-name))
+           (header (lambda () (with-selected-window sidebar (pi-deck-sidebar-header))))
+           (text (lambda () (substring-no-properties (funcall header)))))
+      (should (equal (buffer-local-value 'header-line-format (window-buffer sidebar))
+                     '(:eval (pi-deck-sidebar-header))))
+      (should (equal (funcall text) " no agents"))
+      (let ((a (pi-deck-test--session dir "a"))
+            (b (pi-deck-test--session dir "b")))
+        (should (equal (funcall text) " all idle"))
+        (pi-deck-test--phase a "thinking")
+        (pi-deck-test--phase b "thinking")
+        (pi-deck-test--phase b "idle")
+        (should (equal (funcall text) " ● 1 done · ◐ 1 working"))
+        ;; Clicking the summary goes to the next agent needing attention.
+        (let ((summary (funcall header)))
+          (should (eq (keymap-lookup (get-text-property 1 'local-map summary)
+                                     "<header-line> <mouse-1>")
+                      #'pi-deck-next-attention)))
+        ;; Extra items go to the right; nil items are left out, and % is
+        ;; escaped for the header line.
+        (let* ((map (make-sparse-keymap))
+               (pi-deck-sidebar-header-items
+                (list (lambda () (propertize "mic 5%" 'local-map map)) #'ignore)))
+          (should (string-match-p "working .*mic 5%%\\'" (funcall text)))
+          (let ((line (funcall header)))
+            (should (eq (get-text-property (string-search "mic" line) 'local-map line) map))))
+        ;; Without room, status names are left out.
+        (let ((pi-deck-sidebar-header-items (list (lambda () (make-string 25 ?x)))))
+          (should (string-prefix-p " ● 1 · ◐ 1" (funcall text))))))))
 
 (defun pi-deck-test--position (property value)
   "Return the first position whose PROPERTY is `equal' to VALUE, or nil."
@@ -557,7 +672,7 @@
            (other (pi-deck-test--session dir "other"))
            (row-of (lambda (sidebar chat)
                      (with-current-buffer (window-buffer sidebar)
-                       (pi-deck-overview-refresh)
+                       (pi-deck-sidebar-refresh)
                        (text-property-any (point-min) (point-max)
                                           'pi-deck-agent (pi-deck-agent chat))))))
       (setf (pi-deck-agent-parent (pi-deck-agent worker)) parent
@@ -568,18 +683,18 @@
         (should (eq (window-parameter sidebar 'window-side) 'left))
         ;; A worker opens beside its shown parent.
         (select-window sidebar)
-        (pi-deck-overview-mouse-1 (pi-deck-test--click sidebar (funcall row-of sidebar worker)))
+        (pi-deck-sidebar-mouse-1 (pi-deck-test--click sidebar (funcall row-of sidebar worker)))
         (should (eq (pilish-session-chat-buffer (window-buffer)) worker))
         (should (get-buffer-window parent))
         ;; Another agent replaces the main view.
         (select-window sidebar)
-        (pi-deck-overview-mouse-1 (pi-deck-test--click sidebar (funcall row-of sidebar other)))
+        (pi-deck-sidebar-mouse-1 (pi-deck-test--click sidebar (funcall row-of sidebar other)))
         (should (eq (pilish-session-chat-buffer (window-buffer)) other))
         (should-not (get-buffer-window worker))
         (should (eq (get-buffer-window pi-deck-sidebar-buffer-name) sidebar))
         ;; Middle-click shows a row beside the current pane, keeping focus.
         (select-window sidebar)
-        (pi-deck-overview-mouse-show
+        (pi-deck-sidebar-mouse-show
          (pi-deck-test--click sidebar (funcall row-of sidebar worker) 'mouse-2))
         (should (eq (selected-window) sidebar))
         (should (get-buffer-window worker))
@@ -602,14 +717,14 @@
       (pi-deck-sidebar-toggle)
       (let* ((sidebar (get-buffer-window pi-deck-sidebar-buffer-name))
              (row (with-current-buffer (window-buffer sidebar)
-                    (pi-deck-overview-refresh)
+                    (pi-deck-sidebar-refresh)
                     (text-property-any (point-min) (point-max) 'pi-deck-agent (pi-deck-agent b)))))
-        (should (eq (lookup-key pi-deck-overview-row-map [double-mouse-1])
-                    #'pi-deck-overview-mouse-only))
+        (should (eq (lookup-key pi-deck-sidebar-row-map [double-mouse-1])
+                    #'pi-deck-sidebar-mouse-only))
         ;; A double click arrives as mouse-1, then double-mouse-1.
         (select-window sidebar)
-        (pi-deck-overview-mouse-1 (pi-deck-test--click sidebar row))
-        (pi-deck-overview-mouse-only (pi-deck-test--click sidebar row 'double-mouse-1))
+        (pi-deck-sidebar-mouse-1 (pi-deck-test--click sidebar row))
+        (pi-deck-sidebar-mouse-only (pi-deck-test--click sidebar row 'double-mouse-1))
         (should (equal (mapcar (lambda (window) (pilish-session-chat-buffer (window-buffer window)))
                                (pi-deck-test--main-windows))
                        (list b b)))
@@ -625,23 +740,23 @@
                             (pi-deck-refresh)
                             (pi-deck-show-beside (pi-deck-agent shell))
                             (with-current-buffer (window-buffer sidebar)
-                              (pi-deck-overview-refresh)
+                              (pi-deck-sidebar-refresh)
                               (text-property-any (point-min) (point-max)
                                                  'pi-deck-agent (pi-deck-agent shell))))))
           (should (get-buffer-window shell))
           (select-window sidebar)
-          (pi-deck-overview-mouse-1 (pi-deck-test--click sidebar shell-row))
-          (pi-deck-overview-mouse-only (pi-deck-test--click sidebar shell-row 'double-mouse-1))
+          (pi-deck-sidebar-mouse-1 (pi-deck-test--click sidebar shell-row))
+          (pi-deck-sidebar-mouse-only (pi-deck-test--click sidebar shell-row 'double-mouse-1))
           (should (equal (mapcar #'window-buffer (pi-deck-test--main-windows)) (list shell)))
           (should (eq (get-buffer-window pi-deck-sidebar-buffer-name) sidebar))))))))
 
 ;; The sidebar lists agents by home space in creation order: showing,
-;; revealing or moving them between tabs never reorders it.
+;; revealing or moving them between spaces never reorders it.
 (defun pi-deck-test--sidebar-rows (sidebar)
   "Return SIDEBAR's agent rows as (SPACE NAME MARK) in display order.
-MARK is `bold' (shown in this tab), `elsewhere' (◦) or nil."
+MARK is `shown' (highlighted: the frame shows it) or nil."
   (with-current-buffer (window-buffer sidebar)
-    (pi-deck-overview-refresh)
+    (pi-deck-sidebar-refresh)
     (let (rows space)
       (goto-char (point-min))
       (while (not (eobp))
@@ -653,8 +768,9 @@ MARK is `bold' (shown in this tab), `elsewhere' (◦) or nil."
                    (name (pi-deck-agent-name agent))
                    (start (string-search name line)))
               (push (list space name
-                          (cond ((eq (get-text-property start 'face line) 'bold) 'bold)
-                                ((string-match-p (concat (regexp-quote name) " ◦") line) 'elsewhere)))
+                          (and (memq 'pi-deck-shown-agent
+                                     (ensure-list (get-text-property start 'face line)))
+                               'shown))
                     rows))))
         (forward-line 1))
       (nreverse rows))))
@@ -674,35 +790,32 @@ MARK is `bold' (shown in this tab), `elsewhere' (◦) or nil."
               (pi-deck-agent-target mid) "t-1")
         (should (equal (pi-deck-agents) (list zeta alpha mid beta)))
         (pi-deck-sidebar-toggle)
-        (let ((sidebar (lambda () (get-buffer-window pi-deck-sidebar-buffer-name)))
-              (rows (lambda (sidebar) (mapcar (lambda (row) (take 2 row))
-                                              (pi-deck-test--sidebar-rows sidebar)))))
+        (let* ((sidebar (lambda () (get-buffer-window pi-deck-sidebar-buffer-name)))
+               (rows (lambda () (mapcar (lambda (row) (take 2 row))
+                                        (pi-deck-test--sidebar-rows (funcall sidebar)))))
+               (marks (lambda () (mapcar #'cdr (pi-deck-test--sidebar-rows (funcall sidebar))))))
           ;; Creation order, the worker under its parent; not by name.
-          (should (equal (funcall rows (funcall sidebar)) order))
+          (should (equal (funcall rows) order))
           ;; Revealing agents one after another in the same pane keeps it.
           (dolist (agent (list alpha beta zeta))
-            (pi-deck-reveal agent 'window)
-            (should (equal (funcall rows (funcall sidebar)) order)))
-          ;; zeta in the current tab is bold; shown in another tab, ◦.
-          (should (equal (assoc-default "zeta" (mapcar #'cdr (pi-deck-test--sidebar-rows (funcall sidebar))))
-                         '(bold)))
-          (pi-deck-new-tab "other")
-          (pi-deck--display-agent-in-window beta (pi-deck--pane-window))
-          (pi-deck-select-tab 1)
-          (let ((marks (mapcar #'cdr (pi-deck-test--sidebar-rows (funcall sidebar)))))
-            (should (equal (assoc-default "zeta" marks) '(bold)))
-            (should (equal (assoc-default "beta" marks) '(elsewhere)))
-            (should (equal (assoc-default "alpha" marks) '(nil))))
-          ;; Shown in another space's tab, alpha stays home and in place.
+            (pi-deck-reveal agent)
+            (should (equal (funcall rows) order)))
+          ;; Only rows of agents the frame shows are highlighted.
+          (should (equal (assoc-default "zeta" (funcall marks)) '(shown)))
+          (should (equal (assoc-default "beta" (funcall marks)) '(nil)))
+          ;; Shown in another space's layout, alpha stays home and in place.
           (pi-deck-select-space "two")
           (pi-deck--display-agent-in-window alpha (pi-deck--pane-window))
           (should (equal (pi-deck-agent-space alpha) "space"))
-          (should (equal (funcall rows (funcall sidebar)) order))
+          (should (equal (funcall rows) order))
+          (should (equal (assoc-default "alpha" (funcall marks)) '(shown)))
+          (should (equal (assoc-default "zeta" (funcall marks)) '(nil)))
           (should-not (assoc "two" (pi-deck-space-statuses)))
+          (pi-deck-select-space "space")
+          (should (equal (assoc-default "alpha" (funcall marks)) '(nil)))
           ;; A new agent goes to the bottom.
           (pi-deck-test--session dir "aardvark")
-          (should (equal (funcall rows (funcall sidebar))
-                         (append order '(("space" "aardvark"))))))))))
+          (should (equal (funcall rows) (append order '(("space" "aardvark"))))))))))
 
 (ert-deftest pi-deck-test-agent-order-survives-restore ()
   (pi-deck-test--with-deck
@@ -737,13 +850,11 @@ MARK is `bold' (shown in this tab), `elsewhere' (◦) or nil."
                          (with-current-buffer (window-buffer sidebar)
                            (text-property-any row (save-excursion (goto-char row) (line-end-position)) 'pi-deck-button action)))))
           (with-current-buffer (window-buffer sidebar)
-            (pi-deck-overview-refresh)
+            (pi-deck-sidebar-refresh)
             (let ((text (buffer-substring-no-properties (point-min) (point-max))))
-              (should (string-match-p "\\` ⌂ Overview\n" text))
-              (should (string-match-p "▾ ○ two (0) \\+\n" text))
+              (should (string-match-p "\\` ▾ ○ two (0) \\+\n" text))
               (should (string-match-p "▾ ○ space (2) \\+\n   ○ a ✕\n     ○ p ✕\n" text))
-              (should (string-match-p "\n \\+ New space\n\\'" text))
-              (should-not (string-match-p pi-deck-root-name text))))
+              (should (string-match-p "\n \\+ New space\n\\'" text))))
           ;; The current space's name is highlighted.
           (should (eq (get-text-property (+ 5 (funcall at 'pi-deck-space "space")) 'face
                                          (window-buffer sidebar))
@@ -751,170 +862,62 @@ MARK is `bold' (shown in this tab), `elsewhere' (◦) or nil."
           (cl-letf (((symbol-function 'pi-deck-popup) (lambda (menu &rest _) (setq popped menu)))
                     ((symbol-function 'pi-deck-stop) (lambda (agent &rest _) (setq stopped agent))))
             ;; ✕ stops its row's agent, + opens its space's menu.
-            (pi-deck-overview-mouse-1
+            (pi-deck-sidebar-mouse-1
              (pi-deck-test--click sidebar (funcall button (funcall at 'pi-deck-agent (pi-deck-agent panel)) 'stop)))
             (should (eq stopped (pi-deck-agent panel)))
-            (pi-deck-overview-mouse-1
+            (pi-deck-sidebar-mouse-1
              (pi-deck-test--click sidebar (funcall button (funcall at 'pi-deck-space "two") 'space-menu)))
             (should (keymapp popped))
             ;; The arrow folds; the name visits the space and unfolds it.
-            (pi-deck-overview-mouse-1
+            (pi-deck-sidebar-mouse-1
              (pi-deck-test--click sidebar (funcall button (funcall at 'pi-deck-space "space") 'fold)))
-            (should (member "space" (buffer-local-value 'pi-deck-overview--collapsed (window-buffer sidebar))))
-            (pi-deck-overview-mouse-1 (pi-deck-test--click sidebar (funcall at 'pi-deck-space "two")))
+            (should (member "space" (buffer-local-value 'pi-deck-sidebar--collapsed (window-buffer sidebar))))
+            (pi-deck-sidebar-mouse-1 (pi-deck-test--click sidebar (funcall at 'pi-deck-space "two")))
             (should (equal (pi-deck-current-space) "two"))
             (let ((sidebar (get-buffer-window pi-deck-sidebar-buffer-name)))
-              (pi-deck-overview-mouse-1
+              (pi-deck-sidebar-mouse-1
                (pi-deck-test--click sidebar (with-current-buffer (window-buffer sidebar)
                                               (pi-deck-test--position 'pi-deck-space "space"))))
               (should (equal (pi-deck-current-space) "space"))
-              (should-not (member "space" (buffer-local-value 'pi-deck-overview--collapsed
-                                                              (get-buffer pi-deck-sidebar-buffer-name))))
-              (setq sidebar (get-buffer-window pi-deck-sidebar-buffer-name))
-              ;; ⌂ shows the overview.
-              (pi-deck-overview-mouse-1 (pi-deck-test--click sidebar 2))
-              (should (pi-deck-root-tab-p (tab-bar--current-tab-find))))))
+              (should-not (member "space" (buffer-local-value 'pi-deck-sidebar--collapsed
+                                                              (get-buffer pi-deck-sidebar-buffer-name)))))))
         (delete-directory two t)))))
 
-(defun pi-deck-test--tab-bar-items ()
-  "Return the tab bar items as (KEY LABEL BINDING), without separators."
-  (cl-loop for item in (pi-deck-tab-bar-format-space)
-           unless (string-match-p "sep" (symbol-name (car item)))
-           collect (list (car item) (substring-no-properties (nth 2 item)) (nth 3 item))))
-
-;; Long names shrink with "…" so every tab keeps its ✕ in the frame.
-(ert-deftest pi-deck-test-tab-bar-names-fit ()
+(ert-deftest pi-deck-test-sidebar-rows-are-clickable ()
   (pi-deck-test--with-deck
     (pi-deck-create-space dir "space")
-    (let* ((long (make-string 60 ?n))
-           (chat (pi-deck-test--session dir long)))
-      (switch-to-buffer chat)
-      (pi-deck-new-tab nil)
-      (let ((pi-deck-tab-name-max-width 30))
-        (dolist (width '(160 60))
-          (set-frame-size nil width 30)
-          (let* ((labels (mapcar (lambda (item) (nth 1 item))
-                                 (cl-remove-if-not (lambda (item) (string-match-p "\\`\\(current-tab\\|tab-[0-9]+\\)\\'" (symbol-name (car item))))
-                                                   (pi-deck-test--tab-bar-items))))
-                 ;; What tab-bar draws: after its optional auto width pass.
-                 (drawn (let ((items (tab-bar-format-list tab-bar-format)))
-                          (if tab-bar-auto-width (tab-bar-auto-width items) items)))
-                 (total (apply #'+ (mapcar (lambda (item) (string-width (nth 2 item))) drawn))))
-            (should (cl-some (lambda (item) (string-match-p "n… ✕ \\'" (nth 2 item))) drawn))
-            (should (= (length labels) 2))
-            (should (cl-some (lambda (label) (string-match-p "n… ✕ \\'" label)) labels))
-            (dolist (label labels)
-              (should (string-match-p "✕ \\'" label))
-              (should (<= (string-width label) 36)))
-            (should (<= total width))))))))
+    (let ((chat (pi-deck-test--session dir "a")) jumped popped)
+      (pi-deck-sidebar-toggle)
+      (let* ((sidebar (get-buffer-window pi-deck-sidebar-buffer-name))
+             (row (with-current-buffer (window-buffer sidebar)
+                    (pi-deck-sidebar-refresh)
+                    (text-property-any (point-min) (point-max) 'pi-deck-agent (pi-deck-agent chat)))))
+        (with-current-buffer (window-buffer sidebar)
+          (should (eq (get-text-property row 'mouse-face) 'highlight))
+          (should (eq (keymap-lookup (get-text-property row 'keymap) "<mouse-1>")
+                      #'pi-deck-sidebar-mouse-1)))
+        (cl-letf (((symbol-function 'pi-deck-jump) (lambda (agent) (setq jumped agent)))
+                  ((symbol-function 'pi-deck-popup) (lambda (menu &rest _) (setq popped menu))))
+          (pi-deck-sidebar-mouse-1 (pi-deck-test--click sidebar row))
+          (should (eq jumped (pi-deck-agent chat)))
+          ;; mouse-3 opens the row's menu.
+          (pi-deck-sidebar-mouse-3 (pi-deck-test--click sidebar row 'mouse-3))
+          (should (equal (keymap-prompt popped) "a")))))))
 
-(ert-deftest pi-deck-test-tab-bar-shows-the-current-space ()
+(ert-deftest pi-deck-test-sidebar-default-and-saved-toggle ()
   (pi-deck-test--with-deck
-    (let ((two (make-temp-file "pi-deck-two-" t)))
-      (pi-deck-create-space two "two")
-      (pi-deck-create-space dir "space")
-      (let ((chat (pi-deck-test--session dir "a")))
-        (should-not (pi-deck-tab-bar-format-status))
-        (pi-deck-test--phase chat "thinking")
-        (switch-to-buffer chat)
-        (pi-deck-new-tab nil)
-        (let ((items (pi-deck-test--tab-bar-items)))
-          ;; ⌂, the space button, this space's two tabs (named after their
-          ;; agent, with icons and ✕), then +.  The root and "two" are absent.
-          (should (equal (mapcar #'car items) '(pi-deck-home pi-deck-space tab-3 current-tab pi-deck-add)))
-          (should (equal (nth 1 (nth 1 items)) " ◐ space ▾ "))
-          (should (string-match-p "\\` ◐ a ✕ *\\'" (nth 1 (nth 2 items))))
-          (should (eq (nth 2 (nth 0 items)) 'pi-deck-root))
-          (should (eq (nth 2 (nth 1 items)) 'pi-deck-spaces-menu))
-          (should (eq (nth 2 (nth 4 items)) 'pi-deck-new-tab-menu))
-          ;; Non-current tabs select through tab-bar's default (nil binding).
-          (should-not (nth 2 (nth 2 items))))
-        (let ((label (nth 2 (nth 2 (cl-remove-if (lambda (item) (string-match-p "sep" (symbol-name (car item))))
-                                                 (pi-deck-tab-bar-format-space))))))
-          (should (get-text-property (string-search "✕" label) 'close-tab label)))
-        ;; Numbers count within the space.
-        (pi-deck-toggle-tab-numbers)
-        (should (string-match-p " 2 " (nth 1 (nth 3 (pi-deck-test--tab-bar-items)))))
-        (pi-deck-save-preferences)
-        (setq pi-deck-tab-numbers nil)
-        (pi-deck-load-preferences)
-        (should pi-deck-tab-numbers)
-        ;; From the overview, the most recent space's tabs remain.
-        (pi-deck-root-show)
-        (should (equal (mapcar #'car (pi-deck-test--tab-bar-items))
-                       '(pi-deck-home pi-deck-space tab-3 tab-4 pi-deck-add)))
-        (should (equal (substring-no-properties (pi-deck-tab-bar-status-string)) "◐ 1 working "))
-        (should (eq (nth 3 (car (pi-deck-tab-bar-format-status))) 'pi-deck-tab-bar-status-click)))
-      (delete-directory two t))))
-
-(ert-deftest pi-deck-test-tab-bar-mouse-and-stable-names ()
-  (pi-deck-test--with-deck
+    (setq pi-deck-sidebar t)
     (pi-deck-create-space dir "space")
-    (let ((chat (pi-deck-test--session dir "main"))
-          (shell (pi-deck-test--session dir "zz-panel"))
-          item closed popped)
-      (pi-deck--display-agent-in-window (pi-deck-agent chat) (selected-window))
-      (should (equal (pi-deck-tab-name) "main"))
-      ;; Selecting another pane does not rename the tab.
-      (let ((window (split-window (pi-deck--pane-of (selected-window)) nil 'right)))
-        (set-window-buffer window shell)
-        (select-window window)
-        (should (equal (pi-deck-tab-name) "main")))
-      (should (eq (keymap-lookup tab-bar-map "<mouse-1>") #'pi-deck-tab-bar-mouse-1))
-      (cl-letf (((symbol-function 'pi-deck--tab-bar-item) (lambda (_event) item))
-                ((symbol-function 'pi-deck-close-tab) (lambda (&optional n) (setq closed (or n 'current))))
-                ((symbol-function 'pi-deck-popup) (lambda (menu &rest _) (setq popped menu))))
-        ;; ✕ and mouse-2 close through pi-deck's close.
-        (setq item '(tab-3 nil t))
-        (pi-deck-tab-bar-mouse-1 nil)
-        (should (eq closed 3))
-        (setq item '(current-tab ignore nil) closed nil)
-        (pi-deck-tab-bar-mouse-2 nil)
-        (should (eq closed 'current))
-        ;; mouse-3 opens the tab's or the space's menu.
-        (setq item '(current-tab ignore nil))
-        (pi-deck-tab-bar-mouse-3 nil)
-        (should (equal (keymap-prompt popped) (format "Tab %s" (alist-get 'name (tab-bar--current-tab-find)))))
-        (setq item '(pi-deck-space pi-deck-spaces-menu nil))
-        (pi-deck-tab-bar-mouse-3 nil)
-        (should (equal (keymap-prompt popped) "Space space"))))
-    (pi-deck-mode -1)
-    (should-not (eq (keymap-lookup tab-bar-map "<mouse-1>") #'pi-deck-tab-bar-mouse-1))
-    (pi-deck-mode 1)))
-
-(ert-deftest pi-deck-test-tab-bar-extra-items ()
-  (pi-deck-test--with-deck
-    (pi-deck-create-space dir "space")
-    (let* ((clicks nil)
-           (command (lambda (event) (interactive "e") (push (event-basic-type event) clicks)))
-           (pi-deck-tab-bar-extra-items
-            (list (lambda () `((test-mic menu-item " mic " ,command :help "test"))))))
-      (should (eq (car (last (pi-deck--tab-bar-format))) #'pi-deck-tab-bar-format-extra))
-      (should (equal (mapcar #'car (pi-deck-tab-bar-format-extra)) '(test-mic)))
-      (let ((item (list 'test-mic command nil)) (tabs (pi-deck--tabs)))
-        (cl-letf (((symbol-function 'pi-deck--tab-bar-item) (lambda (_event) item))
-                  ((symbol-function 'pi-deck-popup) (lambda (&rest _) (error "No menu expected"))))
-          ;; Pressing does nothing; releases run the command with the click.
-          (pi-deck-tab-bar-mouse-down-1 '(down-mouse-1 nil))
-          (should (equal (pi-deck--tabs) tabs))
-          (pi-deck-tab-bar-mouse-1 '(mouse-1 nil))
-          (pi-deck-tab-bar-mouse-3 '(mouse-3 nil))
-          (should (equal clicks '(mouse-3 mouse-1))))))))
-
-(ert-deftest pi-deck-test-tab-bar-text-terminal-hit-test ()
-  ;; Labels are placed by display width and right-aligned items at the edge.
-  (let* ((width (frame-inner-width))
-         (tab-bar-format
-          (list (lambda () `((wide menu-item ,(concat "🎤" (propertize "✕" 'close-tab t)) left)))
-                #'tab-bar-format-align-right
-                (lambda () '((right menu-item "ab" right-command))))))
-    (should (equal (pi-deck--tab-bar-item-at 0) '(wide left nil)))
-    (should (equal (pi-deck--tab-bar-item-at 1) '(wide left nil)))
-    (should (equal (pi-deck--tab-bar-item-at 2) '(wide left t)))
-    (should (eq (car (pi-deck--tab-bar-item-at 5)) 'align-right))
-    (should (equal (pi-deck--tab-bar-item-at (- width 2)) '(right right-command nil)))
-    (should (equal (pi-deck--tab-bar-item-at (- width 1)) '(right right-command nil)))
-    (should-not (pi-deck--tab-bar-item-at width))))
+    (should (get-buffer-window pi-deck-sidebar-buffer-name))
+    (pi-deck-create-space (make-temp-file "pi-deck-two-" t) "two")
+    (should (get-buffer-window pi-deck-sidebar-buffer-name))
+    (pi-deck-sidebar-toggle)
+    (should-not (get-buffer-window pi-deck-sidebar-buffer-name))
+    (pi-deck-switch-space "space")
+    (should-not (get-buffer-window pi-deck-sidebar-buffer-name))
+    (setq pi-deck-sidebar t)
+    (pi-deck-load-preferences)
+    (should-not pi-deck-sidebar)))
 
 (ert-deftest pi-deck-test-goto-candidates-group-by-space ()
   (pi-deck-test--with-deck
@@ -955,27 +958,22 @@ MARK is `bold' (shown in this tab), `elsewhere' (◦) or nil."
       (should (eq (pilish-session-chat-buffer (window-buffer)) done))
       (should (eq (pi-deck-agent-status (pi-deck-agent done)) 'idle)))))
 
-(ert-deftest pi-deck-test-layout-grid-and-workers ()
+(ert-deftest pi-deck-test-layout-grid ()
   (pi-deck-test--with-deck
     (pi-deck-create-space dir "space")
     (let ((agents (mapcar (lambda (name) (pi-deck-test--session dir name)) '("a" "b" "c"))))
-      (pi-deck-apply-layout "grid")
+      (pi-deck-layout-grid)
       ;; Each agent's cell is its chat over its input.
       (should (= (length (window-list nil 'no-minibuf)) 6))
       (should (cl-every (lambda (chat)
                           (equal (pilish-window-pair (get-buffer-window chat))
                                  (cons (get-buffer-window chat)
                                        (get-buffer-window (pilish-session-input-buffer chat)))))
-                        agents))
-      (setf (pi-deck-agent-parent (pi-deck-agent (nth 1 agents))) (nth 0 agents)
-            (pi-deck-agent-parent (pi-deck-agent (nth 2 agents))) (nth 0 agents))
-      (select-window (get-buffer-window (nth 0 agents)))
-      (pi-deck-apply-layout "workers")
-      (should (= (length (window-list nil 'no-minibuf)) 6)) ; three chat and input pairs
-      (pi-deck-apply-layout "single")
-      (should (= (length (window-list nil 'no-minibuf)) 2)))))
+                        agents)))
+    (pi-deck-create-space (make-temp-file "pi-deck-empty-" t) "empty")
+    (should-error (pi-deck-layout-grid) :type 'user-error)))
 
-;;;; Closing
+;;;; Stopping
 
 (defmacro pi-deck-test--asking (answer &rest body)
   "Run BODY answering every stop question with ANSWER; return the questions."
@@ -988,102 +986,62 @@ MARK is `bold' (shown in this tab), `elsewhere' (◦) or nil."
      (nreverse questions)))
 
 (defun pi-deck-test--settle ()
-  "Run timers pi-deck deferred (stopping after a tab closed)."
+  "Run timers pi-deck deferred (placing panels after a target started)."
   (pi-deck-test--wait (lambda () nil) 0.05))
 
-(ert-deftest pi-deck-test-closing-a-tab-stops-what-only-it-shows ()
+(ert-deftest pi-deck-test-stopping-asks-when-busy-and-removes-views-everywhere ()
   (pi-deck-test--with-large-frame
    (pi-deck-test--with-deck
-    (pi-deck-create-space dir "space")
-    (let* ((a (pi-deck-test--session dir "a"))
-           (b (pi-deck-test--session dir "b"))
-           (worker (pi-deck-test--session dir "w"))
-           (shown (pi-deck-test--session dir "s")))
-      (setf (pi-deck-agent-parent (pi-deck-agent worker)) a
-            (pi-deck-agent-target (pi-deck-agent worker)) "t-w"
-            (pi-deck-agent-parent (pi-deck-agent shown)) a)
-      ;; Tab 1 shows A and B; tab 2 shows B and S (A's child).
-      (pi-deck--display-agent-in-window (pi-deck-agent a) (selected-window))
-      (pi-deck-show-beside (pi-deck-agent b))
-      (pi-deck-new-tab nil)
-      (pi-deck--display-agent-in-window (pi-deck-agent b) (selected-window))
-      (pi-deck-show-beside (pi-deck-agent shown))
-      (pi-deck-select-tab 1)
-      (let ((tab (tab-bar--current-tab-find)))
-        ;; A and its viewless worker stop; B and S have other views.
-        (should (equal (pi-deck-tab-close-plan tab)
-                       (list (pi-deck-agent a) (pi-deck-agent worker))))
-        ;; Idle agents stop without a question.
+    (let ((two (make-temp-file "pi-deck-two-" t)))
+      (pi-deck-create-space two "two")
+      (pi-deck-create-space dir "space")
+      (let* ((a (pi-deck-test--session dir "a"))
+             (worker (pi-deck-test--session dir "w"))
+             (c (pi-deck-test--session dir "c")))
+        (setf (pi-deck-agent-parent (pi-deck-agent worker)) a)
+        ;; "space" shows A and C; "two" shows C and the worker.
+        (pi-deck--display-agent-in-window (pi-deck-agent a) (selected-window))
+        (pi-deck-show-beside (pi-deck-agent c))
+        (pi-deck-select-space "two")
+        (pi-deck--display-agent-in-window (pi-deck-agent c) (pi-deck--pane-window))
+        (pi-deck-show-beside (pi-deck-agent worker))
+        (pi-deck-select-space "space")
+        ;; A working agent makes stopping ask, naming its workers; no keeps them.
         (pi-deck-test--phase worker "thinking")
-        ;; A working one asks, naming everything that stops; no closes it.
-        (let ((questions (pi-deck-test--asking nil (pi-deck-close-tab))))
-          (should (equal questions
-                         '(("Closing tab a stops a (idle), w (working)." "Stop 2 and close")))))
-        (should (= (length (pi-deck--space-tab-entries "space")) 2))
+        (should (equal (pi-deck-test--asking nil (pi-deck-stop (pi-deck-agent a)))
+                       '(("Stopping a stops a (idle), w (working)." "Stop 2"))))
         (should (buffer-live-p a))
-        ;; Yes closes the tab and stops them.
-        (pi-deck-test--asking t (pi-deck-close-tab))
-        (pi-deck-test--settle)
-        (should (= (length (pi-deck--space-tab-entries "space")) 1))
+        (pi-deck-test--asking t (pi-deck-stop (pi-deck-agent a)))
         (should-not (buffer-live-p a))
         (should-not (buffer-live-p worker))
-        (should (buffer-live-p b))
-        (should (buffer-live-p shown))
-        (should (equal (pi-deck-current-space) "space")))
-      ;; The tab bar's ✕ goes through the same rule: tab-bar's own close
-      ;; runs `pi-deck--tab-close-guard'.
-      (pi-deck-test--phase b "thinking")
-      (let ((questions (pi-deck-test--asking nil
-                         (tab-bar-close-tab (1+ (tab-bar--current-tab-index))))))
-        (should (equal (cadr (car questions)) "Stop 2 and close")))
-      (should (buffer-live-p b))
-      ;; The overview tab is pinned.
-      (tab-bar-close-tab 1)
-      (should (pi-deck-root-tab-p (car (tab-bar-tabs))))))))
+        (should (get-buffer-window c))
+        (should (= (length (pi-deck-test--main-windows)) 2))
+        ;; Idle agents stop without a question; the only pane shows Dired.
+        (should-not (pi-deck-test--asking t (pi-deck-stop (pi-deck-agent c))))
+        (should-not (buffer-live-p c))
+        (should (one-window-p))
+        (should (pi-deck-test--in-dired-p))
+        ;; The other space's layout lost them too.
+        (pi-deck-switch-space "two")
+        (should (one-window-p))
+        (should (pi-deck-test--in-dired-p))
+        (should (= (length (tab-bar-tabs)) 2)))
+      (delete-directory two t)))))
 
-(ert-deftest pi-deck-test-closing-panes-agents-and-spaces ()
-  (pi-deck-test--with-large-frame
-   (pi-deck-test--with-deck
+(ert-deftest pi-deck-test-closing-a-space-stops-its-agents ()
+  (pi-deck-test--with-deck
     (pi-deck-create-space dir "space")
-    (let* ((a (pi-deck-test--session dir "a"))
-           (b (pi-deck-test--session dir "b"))
-           (c (pi-deck-test--session dir "c")))
+    (let ((a (pi-deck-test--session dir "a"))
+          (loose (pi-deck-test--session (make-temp-file "pi-deck-loose-" t) "loose")))
       (pi-deck--display-agent-in-window (pi-deck-agent a) (selected-window))
-      (pi-deck-show-beside (pi-deck-agent b))
-      (pi-deck-show-beside (pi-deck-agent c))
-      ;; C is shown twice: closing one of its panes stops nothing.
-      (let ((second (pi-deck--split-pane (get-buffer-window c) 'right)))
-        (pi-deck--display-agent-in-window (pi-deck-agent c) second)
-        (should-not (pi-deck-pane-close-plan second))
-        (pi-deck-close-pane second)
-        (should (buffer-live-p c))
-        (should (get-buffer-window c)))
-      ;; B's only pane: a working B asks; yes stops it.
-      (pi-deck-test--phase b "thinking")
-      (should (equal (pi-deck-test--asking t (pi-deck-close-pane (get-buffer-window b)))
-                     '(("Closing this pane stops b (working)." "Stop 1 and close"))))
-      (should-not (buffer-live-p b))
-      ;; Stopping C from its row removes its pane too.
-      (pi-deck-stop (pi-deck-agent c))
-      (should-not (buffer-live-p c))
-      (should (get-buffer-window a))
-      ;; The tab's only pane closes the tab.
-      (pi-deck-new-tab nil)
-      (should (= (length (pi-deck--space-tab-entries "space")) 2))
-      (let ((d (pi-deck-test--session dir "d")))
-        (pi-deck--display-agent-in-window (pi-deck-agent d) (selected-window))
-        (pi-deck-close-pane)
-        (pi-deck-test--settle)
-        (should-not (buffer-live-p d)))
-      (should (= (length (pi-deck--space-tab-entries "space")) 1))
-      ;; Closing the space stops its agents; working ones make it ask.
       (pi-deck-test--phase a "thinking")
-      (should (equal (cadr (car (pi-deck-test--asking nil (pi-deck-close-space "space"))))
-                     "Stop 1 and close"))
+      (should (equal (pi-deck-test--asking nil (pi-deck-close-space "space"))
+                     '(("Closing space space stops a (working)." "Stop 1 and close"))))
       (should (pi-deck-space "space"))
       (pi-deck-test--asking t (pi-deck-close-space "space"))
       (should-not (pi-deck-space "space"))
-      (should-not (buffer-live-p a))))))
+      (should-not (buffer-live-p a))
+      (should (buffer-live-p loose)))))
 
 (ert-deftest pi-deck-test-mouse-closes-ask-with-a-dialog ()
   (let (dialog)
@@ -1091,10 +1049,10 @@ MARK is `bold' (shown in this tab), `elsewhere' (◦) or nil."
               ((symbol-function 'x-popup-dialog)
                (lambda (_position contents &rest _) (setq dialog contents) t))
               ((symbol-function 'y-or-n-p) (lambda (&rest _) (error "Keyboard question"))))
-      (should (pi-deck--ask "Closing tab a stops a (working)." "Stop 1 and close"
+      (should (pi-deck--ask "Stopping a stops a (working)." "Stop 1"
                             (pi-deck-test--click (selected-window) 1)))
-      (should (equal dialog '("Closing tab a stops a (working)."
-                              ("Cancel") ("Stop 1 and close" . t)))))
+      (should (equal dialog '("Stopping a stops a (working)."
+                              ("Cancel") ("Stop 1" . t)))))
     ;; From the keyboard, the minibuffer asks.
     (let ((last-nonmenu-event ?x))
       (cl-letf (((symbol-function 'y-or-n-p) (lambda (prompt) (setq dialog prompt) nil)))
@@ -1121,7 +1079,7 @@ MARK is `bold' (shown in this tab), `elsewhere' (◦) or nil."
                         #'pi-deck-header-zoom))
             (should (eq (keymap-lookup (get-text-property close 'local-map header)
                                        "<header-line> <mouse-1>")
-                        #'pi-deck-header-close)))))
+                        #'pi-deck-header-hide)))))
       ;; [⑂] forks through /fork-here without touching the draft; a
       ;; prefix function puts e.g. the window number first.
       (with-current-buffer chat
@@ -1156,13 +1114,23 @@ MARK is `bold' (shown in this tab), `elsewhere' (◦) or nil."
                     (should (eq (get-text-property (string-search "[↑]" header) 'face header)
                                 'header-line-highlight))))
               (kill-local-variable 'pilish-jump-to-answer)))
+          ;; [↓] puts point at the end, so Pilish follows output again.
+          (let ((latest (string-search "[↓]" header)))
+            (should (eq (keymap-lookup (get-text-property latest 'local-map header)
+                                       "<header-line> <mouse-1>")
+                        #'pi-deck-header-latest))
+            (switch-to-buffer chat)
+            (let ((inhibit-read-only t)) (insert (make-string 50 ?\n) "end"))
+            (goto-char (point-min))
+            (pi-deck-header-latest (pi-deck-test--click (selected-window) 1))
+            (should (= (window-point) (point-max))))
           (should (eq (keymap-lookup pi-deck-command-map "f") #'pi-deck-fork))))
       ;; A long name is truncated, never the buttons.
       (let ((long (pi-deck-test--session dir (make-string 80 ?x))))
         (switch-to-buffer long)
         (pi-deck--run-update)
         (let ((header (substring-no-properties (pi-deck-pane-header))))
-          (should (string-match-p "x… *\\[↑\\] \\[⑂\\] \\[⤢\\] \\[✕\\] \\'" header))
+          (should (string-match-p "x… *\\[↑\\] \\[↓\\] \\[⑂\\] \\[⤢\\] \\[✕\\] \\'" header))
           (should (<= (string-width (car (split-string header "\\[⤢\\]")))
                       (window-total-width)))))
       ;; Disabling the mode restores the header line.
@@ -1179,12 +1147,36 @@ MARK is `bold' (shown in this tab), `elsewhere' (◦) or nil."
                 menu)
     (nreverse labels)))
 
+(defun pi-deck-test--menu-command (menu label)
+  "Return the command of the item LABEL in MENU."
+  (let (command)
+    (map-keymap (lambda (_key binding)
+                  (when (and (eq (car-safe binding) 'menu-item)
+                             (equal (nth 1 binding) label))
+                    (setq command (nth 2 binding))))
+                menu)
+    command))
+
+(ert-deftest pi-deck-test-space-menu-acts-in-its-space ()
+  (pi-deck-test--with-deck
+    (let ((two (make-temp-file "pi-deck-two-" t)))
+      (pi-deck-create-space two "two")
+      (pi-deck-create-space dir "space")
+      (funcall (pi-deck-test--menu-command (pi-deck-space-menu "two") "New shell"))
+      (should (equal (pi-deck-current-space) "two"))
+      (should (= (length (tab-bar-tabs)) 2))
+      (let ((shell (pi-deck-agent (window-buffer))))
+        (should (eq (pi-deck-agent-kind shell) 'shell))
+        (should (equal (pi-deck-agent-assigned-space shell) "two")))
+      (delete-directory two t))))
+
 (ert-deftest pi-deck-test-context-menus ()
   (pi-deck-test--with-deck
     (pi-deck-create-space dir "space")
     (let ((chat (pi-deck-test--session dir "a")))
       (should (equal (pi-deck-test--menu-labels (pi-deck-agent-menu (pi-deck-agent chat)))
-                     '("Jump" "Show beside" "Zoom" "Rename…" "--" "Fork" "Compact" "Copy session file" "--" "Stop")))
+                     '("Jump" "Show beside" "Show alone" "Rename…" "--" "Fork" "Compact"
+                       "Copy session file" "--" "Stop")))
       (cl-letf (((symbol-function 'message) #'ignore))
         (with-current-buffer chat
           (pilish--handle-extension-ui-request
@@ -1192,11 +1184,7 @@ MARK is `bold' (shown in this tab), `elsewhere' (◦) or nil."
       (should (member "Answer question"
                       (pi-deck-test--menu-labels (pi-deck-agent-menu (pi-deck-agent chat)))))
       (should (equal (pi-deck-test--menu-labels (pi-deck-space-menu "space"))
-                     '("New agent" "New shell" "New tab" "--" "Rename…" "Close space")))
-      (should (equal (pi-deck-test--menu-labels (pi-deck-tab-context-menu 2))
-                     '("Rename…" "Close")))
-      (should (equal (pi-deck-test--menu-labels (pi-deck--new-tab-menu-map))
-                     '("New agent" "New shell" "Empty tab")))
+                     '("New agent" "New shell" "--" "Rename…" "Close space")))
       (should (equal (pi-deck-test--menu-labels
                       (pi-deck-finished-worker-menu '(:name "do-1" :session-file "/tmp/x")))
                      '("Open transcript")))
@@ -1205,7 +1193,9 @@ MARK is `bold' (shown in this tab), `elsewhere' (◦) or nil."
         (pi-deck-rename-agent shell "logs")
         (should (equal (pi-deck-agent-name shell) "logs"))))))
 
-(ert-deftest pi-deck-test-forks-get-tabs-workers-do-not ()
+;;;; Orchestration
+
+(ert-deftest pi-deck-test-forks-join-their-parent-space ()
   (require 'pi-orchestration)
   (pi-deck-test--with-deck
     (pi-deck-create-space dir "space")
@@ -1215,104 +1205,198 @@ MARK is `bold' (shown in this tab), `elsewhere' (◦) or nil."
       (cl-letf (((symbol-function 'pilish-start-session)
                  (lambda (directory name &rest _) (pi-deck-test--session directory name))))
         (unwind-protect
-            (let ((tabs (length (tab-bar-tabs))))
+            (progn
               (dolist (spec '(("fork-1" "interactive-fork") ("do-1" "worker")))
                 (pi-orchestration--start
                  (list :id (car spec) :endpoint "test"
-                       :spec (list :kind "pi" :name (car spec) :cwd dir :placement (cadr spec)
+                       :spec (list :kind "pi" :name (car spec) :cwd "/tmp/" :placement (cadr spec)
                                    :sessionFile (expand-file-name "x.jsonl" dir)
                                    :parent (list :id (buffer-name parent))))))
-              (should (pi-deck-test--wait (lambda () (= (length (tab-bar-tabs)) (1+ tabs)))))
               (pi-deck-test--settle)
-              (should (= (length (tab-bar-tabs)) (1+ tabs)))
+              ;; Neither gets a layout of its own or a pane.
+              (should (= (length (tab-bar-tabs)) 1))
+              (should (one-window-p))
               (should (eq (window-buffer) parent))
-              (let* ((fork (plist-get (pi-orchestration--target "fork-1") :buffer))
-                     (tab (car (last (tab-bar-tabs)))))
-                (should (equal (pi-deck--tab-group tab) "space"))
-                (should (memq fork (pi-deck--tab-buffers tab (selected-frame))))
-                (should-not (pi-deck-agent-worker-p (pi-deck-agent fork))))
-              (should (pi-deck-agent-worker-p
-                       (pi-deck-agent (plist-get (pi-orchestration--target "do-1") :buffer)))))
+              (let ((fork (pi-deck-agent (plist-get (pi-orchestration--target "fork-1") :buffer))))
+                (should (equal (pi-deck-agent-assigned-space fork) "space"))
+                (should-not (pi-deck-agent-worker-p fork)))
+              (let ((worker (plist-get (pi-orchestration--target "do-1") :buffer)))
+                (should (pi-deck-agent-worker-p (pi-deck-agent worker)))
+                (should (equal (pi-deck-agent-space (pi-deck-agent worker)) "space"))
+                ;; A finished worker does not notify.
+                (setq pi-deck-test--notifications nil)
+                (pi-deck-test--phase worker "thinking")
+                (pi-deck-test--phase worker "idle")
+                (should-not pi-deck-test--notifications)))
           (maphash (lambda (id _) (pi-orchestration--close id t)) pi-orchestration--targets))))))
+
+(ert-deftest pi-deck-test-orchestration-workers-nest-under-parent ()
+  (require 'pi-orchestration)
+  (pi-deck-test--with-deck
+    (pi-deck-create-space dir "space")
+    (let* ((pi-orchestration--targets (make-hash-table :test 'equal))
+           (parent (pi-deck-test--session dir "root")))
+      (unwind-protect
+          (progn
+            (pi-orchestration--start
+             (list :id "panel-1" :endpoint "test"
+                   :spec (list :kind "shell" :name "build" :cwd "/tmp/"
+                               :parent (list :id (buffer-name parent))
+                               :argv ["/bin/sh" "-c" "read line"])))
+            (let ((panel (pi-deck-agent (plist-get (pi-orchestration--target "panel-1") :buffer))))
+              (should panel)
+              (should (eq (pi-deck-agent-parent panel) parent))
+              (should (equal (pi-deck-agent-target panel) "panel-1"))
+              (should (equal (pi-deck-agent-space panel) "space"))
+              (should-not (pi-deck--agent-record panel (pi-deck-tab-index)))
+              (with-current-buffer (pi-deck-sidebar-buffer)
+                (pi-deck-sidebar-refresh)
+                (should (string-match-p "○ root .*\n     [^ \n]+ build "
+                                        (buffer-substring-no-properties (point-min) (point-max)))))))
+        (pi-orchestration--close "panel-1")))))
+
+(ert-deftest pi-deck-test-panels-open-beside-their-parent-and-close ()
+  (require 'pi-orchestration)
+  (pi-deck-test--with-deck
+    (pi-deck-create-space dir "space")
+    (let* ((pi-orchestration--targets (make-hash-table :test 'equal))
+           (parent (pi-deck-test--session dir "root"))
+           (start (lambda (id)
+                    (pi-orchestration--start
+                     (list :id id :endpoint "test"
+                           :spec (list :kind "shell" :name id :cwd "/tmp/"
+                                       :parent (list :id (buffer-name parent))
+                                       :argv ["/bin/sh" "-c" "read line"])))
+                    (plist-get (pi-orchestration--target id) :buffer))))
+      (unwind-protect
+          (progn
+            ;; The parent is on screen: the panel takes half of its pane, to the
+            ;; right when the pane is at least twice as wide as high, unfocused.
+            (switch-to-buffer parent)
+            (let ((panel (funcall start "p1"))
+                  (direction (pi-deck--panel-direction (selected-window))))
+              (should (pi-deck-test--wait (lambda () (get-buffer-window panel))))
+              (should (eq (window-buffer) parent))
+              ;; The panel starts where the parent's pane ends.
+              (let ((pane (window-edges (pi-deck--pane-of (get-buffer-window parent))))
+                    (edges (window-edges (get-buffer-window panel)))
+                    (side (if (eq direction 'right) 0 1)))
+                (should (= (nth side edges) (nth (+ side 2) pane))))
+              (pi-orchestration--close "p1")
+              (should (= 1 (length (window-list nil 'no-minibuf)))))
+            ;; The parent is not on screen: the panel is only listed, in
+            ;; its parent's space, until it is revealed.
+            (switch-to-buffer "*scratch*")
+            (let ((panel (funcall start "p2")))
+              (pi-deck-test--settle)
+              (should-not (get-buffer-window panel))
+              (should (= (length (tab-bar-tabs)) 1))
+              (should (equal (pi-deck-agent-space (pi-deck-agent panel)) "space"))
+              (pi-deck-reveal (pi-deck-agent panel))
+              (should (eq (window-buffer) panel))
+              ;; When Pi closes it, its pane goes.
+              (pi-orchestration--close "p2")
+              (should (one-window-p))
+              (should (pi-deck-test--in-dired-p))))
+        (maphash (lambda (id _) (pi-orchestration--close id t)) pi-orchestration--targets)))))
+
+(ert-deftest pi-deck-test-closed-workers-are-hidden-and-readable ()
+  (pi-deck-test--with-deck
+    (pi-deck-create-space dir "space")
+    (let* ((parent (pi-deck-test--session dir "root"))
+           (worker (pi-deck-test--session dir "do-1"))
+           (file (expand-file-name "do-1.jsonl" dir))
+           opened)
+      (with-temp-file file
+        (insert "{\"type\":\"session\",\"version\":3,\"id\":\"s-1\",\"cwd\":\"/tmp\"}\n"))
+      (setf (pi-deck-agent-parent (pi-deck-agent worker)) parent
+            (pi-deck-agent-target (pi-deck-agent worker)) "t-1")
+      (let ((pilish-quit-without-confirmation t))
+        (delete-process (pilish-session-process worker))
+        (kill-buffer (pilish-session-input-buffer worker))
+        (kill-buffer worker))
+      (should-not (cl-find "do-1" (pi-deck-agents) :key #'pi-deck-agent-name :test #'equal))
+      (should (equal (mapcar (lambda (record) (plist-get record :name))
+                             (pi-deck-finished-workers parent))
+                     '("do-1")))
+      (with-current-buffer (pi-deck-sidebar-buffer)
+        (pi-deck-sidebar-refresh)
+        (goto-char (point-min))
+        (should (search-forward "▸ 1 finished worker" nil t))
+        (goto-char (point-min))
+        (should (search-forward "1 finished worker" nil t))
+        (should-not (string-match-p "✓ do-1" (buffer-string)))
+        (pi-deck-sidebar-jump)
+        (should (search-forward "✓ do-1" nil t))
+        (cl-letf (((symbol-function 'pilish-open-subagent-snapshot)
+                   (lambda (target) (setq opened target))))
+          (pi-deck-sidebar-jump)))
+      (should (equal (pilish--snapshot-target-session-id opened) "s-1"))
+      (should (equal (pilish--snapshot-target-file opened) "do-1.jsonl"))
+      ;; Closing the parent forgets its workers.
+      (let ((pilish-quit-without-confirmation t))
+        (delete-process (pilish-session-process parent))
+        (kill-buffer parent))
+      (should-not pi-deck--finished-workers))))
 
 ;;;; Persistence and daemon
 
 (ert-deftest pi-deck-test-save-and-restore-state ()
-  (pi-deck-test--with-deck
-    (pi-deck-create-space dir "space")
-    (let* ((chat (pi-deck-test--session dir "keep"))
-           (fresh (pi-deck-test--session dir "fresh"))
-           (shell-buffer (pi-deck-start-shell dir "shell:space" '("/bin/sh" "-c" "read line")))
-           restored)
-      (pi-deck-refresh)
-      (switch-to-buffer chat)
-      (pi-deck-new-tab "shell")
-      (switch-to-buffer shell-buffer)
-      ;; Tabs outside spaces are not saved.
-      (let ((tab-bar-new-tab-group nil)) (tab-bar-new-tab))
-      (switch-to-buffer "*scratch*")
-      (tab-bar-switch-to-prev-tab)
-      (let* ((state (pi-deck-save-state))
-             (records (plist-get state :agents)))
-        (should (equal (sort (mapcar (lambda (record) (plist-get record :kind)) records))
-                       '(pi pi shell)))
-        (let ((keep (seq-find (lambda (record) (equal (plist-get record :name) "keep")) records)))
-          (should (equal (plist-get keep :session-file) (expand-file-name "keep.jsonl" dir))))
-        (should (equal (plist-get (seq-find (lambda (record) (eq (plist-get record :kind) 'shell))
-                                            records)
-                                  :command)
-                       '("/bin/sh" "-c" "read line")))
-        (should (equal (mapcar (lambda (tab) (plist-get tab :group)) (plist-get state :tabs))
-                       (list pi-deck-root-name "space" "space"))))
-      ;; Simulate a restart: processes, buffers and tabs are gone.
-      (pi-deck-stop-agent (pi-deck-agent shell-buffer))
-      (pi-deck-stop-agent (pi-deck-agent chat))
-      (pi-deck-stop-agent (pi-deck-agent fresh))
-      (set-frame-parameter nil 'tabs nil)
-      (setq pi-deck-spaces nil)
-      (with-temp-file (expand-file-name "keep.jsonl" dir) (insert "{}\n"))
-      (pi-deck-root-ensure)
-      (cl-letf (((symbol-function 'pilish-start-session)
-                 (lambda (directory name &rest options)
-                   (push (list name (plist-get options :session-file)) restored)
-                   (pi-deck-test--session directory name))))
-        (pi-deck-restore-state))
-      ;; A session without a file yet (no history) restarts fresh.
-      (should (equal (sort restored :key #'car)
-                     `(("fresh" nil) ("keep" ,(expand-file-name "keep.jsonl" dir)))))
-      (should (equal (pi-deck-space-dir "space") (file-name-as-directory dir)))
-      (should (get-buffer "*shell:space*"))
-      (should (equal (mapcar #'pi-deck--tab-group (tab-bar-tabs))
-                     (list pi-deck-root-name "space" "space")))
-      (should (equal (alist-get 'name (tab-bar--current-tab-find)) "shell"))
-      (should (eq (window-buffer) (get-buffer "*shell:space*")))
-      (pi-deck-select-tab 1)
-      (should (get-buffer-window (pilish--buffer-name :chat (file-name-as-directory dir) "keep"))))))
-
-(ert-deftest pi-deck-test-save-without-frames-keeps-last-tabs ()
-  (pi-deck-test--with-deck
-    (pi-deck-create-space dir "space")
-    (let ((tabs (plist-get (pi-deck-save-state) :tabs)))
-      (should (equal (mapcar (lambda (tab) (plist-get tab :group)) tabs)
-                     (list pi-deck-root-name "space")))
-      ;; All client terminals died without `delete-frame-functions'.
-      (cl-letf (((symbol-function 'pi-deck--client-frames) #'ignore))
-        (should (equal (plist-get (pi-deck-save-state) :tabs) tabs))))))
-
-(ert-deftest pi-deck-test-frames-receive-last-tabs ()
-  (pi-deck-test--with-deck
-    (pi-deck-create-space dir "space")
-    (pi-deck-new-tab "second")
-    (let ((tabs (pi-deck-frame-tabs)))
-      (setq pi-deck--last-tabs tabs)
-      (set-frame-parameter nil 'tabs nil)
-      ;; The new frame's single tab shows the sidebar too; it is still replaced.
-      (delete-other-windows)
-      (pi-deck-sidebar-toggle)
-      (cl-letf (((symbol-function 'pi-deck--client-frames) (lambda () (list (selected-frame)))))
-        (pi-deck-setup-frame (selected-frame)))
-      (should (equal (mapcar #'pi-deck--tab-group (tab-bar-tabs))
-                     (list pi-deck-root-name "space" "space"))))))
+  (pi-deck-test--with-large-frame
+   (pi-deck-test--with-deck
+    (let ((two (make-temp-file "pi-deck-two-" t)))
+      (pi-deck-create-space two "two")
+      (pi-deck-create-space dir "space")
+      (let* ((chat (pi-deck-test--session dir "keep"))
+             (fresh (pi-deck-test--session dir "fresh"))
+             (shell-buffer (pi-deck-start-shell dir "shell:space" '("/bin/sh" "-c" "read line")))
+             (chat-name (buffer-name chat))
+             restored)
+        (pi-deck-refresh)
+        (pi-deck--display-agent-in-window (pi-deck-agent chat) (selected-window))
+        (pi-deck-show-beside (pi-deck-agent shell-buffer))
+        (let* ((state (pi-deck-save-state))
+               (records (plist-get state :agents)))
+          (should (eq (plist-get state :version) 2))
+          (should (equal (plist-get state :space) "space"))
+          (should (equal (sort (mapcar #'car (plist-get state :layouts))) '("space" "two")))
+          (should (member chat-name (window-state-buffers
+                                     (cdr (assoc "space" (plist-get state :layouts))))))
+          (should (equal (sort (mapcar (lambda (record) (plist-get record :kind)) records))
+                         '(pi pi shell)))
+          (let ((keep (seq-find (lambda (record) (equal (plist-get record :name) "keep")) records)))
+            (should (equal (plist-get keep :session-file) (expand-file-name "keep.jsonl" dir))))
+          (should (equal (plist-get (seq-find (lambda (record) (eq (plist-get record :kind) 'shell))
+                                              records)
+                                    :command)
+                         '("/bin/sh" "-c" "read line"))))
+        ;; Simulate a restart: processes, buffers, tabs and spaces are gone.
+        (pi-deck-stop-agent (pi-deck-agent shell-buffer))
+        (pi-deck-stop-agent (pi-deck-agent chat))
+        (pi-deck-stop-agent (pi-deck-agent fresh))
+        (set-frame-parameter nil 'tabs nil)
+        (pi-deck--single-window)
+        (switch-to-buffer "*scratch*")
+        (setq pi-deck-spaces nil pi-deck--layouts nil pi-deck--last-space nil)
+        (with-temp-file (expand-file-name "keep.jsonl" dir) (insert "{}\n"))
+        (cl-letf (((symbol-function 'pilish-start-session)
+                   (lambda (directory name &rest options)
+                     (push (list name (plist-get options :session-file)) restored)
+                     (pi-deck-test--session directory name))))
+          (pi-deck-restore-state))
+        ;; A session without a file yet (no history) restarts fresh.
+        (should (equal (sort restored :key #'car)
+                       `(("fresh" nil) ("keep" ,(expand-file-name "keep.jsonl" dir)))))
+        (should (equal (pi-deck-space-names) '("two" "space")))
+        (should (equal (pi-deck-space-dir "space") (file-name-as-directory dir)))
+        ;; The frame shows the saved space with its layout, paired again.
+        (should (equal (pi-deck-current-space) "space"))
+        (should (= (length (tab-bar-tabs)) 1))
+        (should (pilish-window-pair (get-buffer-window chat-name)))
+        (should (get-buffer-window "*shell:space*"))
+        (pi-deck-switch-space "two")
+        (should (= (length (tab-bar-tabs)) 2)))
+      (delete-directory two t)))))
 
 (ert-deftest pi-deck-test-restart-daemon-saves-and-detaches ()
   (pi-deck-test--with-deck
@@ -1340,9 +1424,9 @@ MARK is `bold' (shown in this tab), `elsewhere' (◦) or nil."
 (defun pi-deck-test--write-state (file owner names dir)
   "Write a state to FILE owned by OWNER with Pi sessions NAMES in DIR."
   (with-temp-file file
-    (prin1 (list :version 1 :owner owner
+    (prin1 (list :version 2 :owner owner
                  :spaces (list (list :name "space" :dir (file-name-as-directory dir)))
-                 :tabs nil
+                 :space "space" :layouts nil
                  :agents (mapcar (lambda (name)
                                    (list :kind 'pi :buffer (format "*restored-%s*" name)
                                          :dir dir :name name :session-file nil :space "space"))
@@ -1423,7 +1507,7 @@ MARK is `bold' (shown in this tab), `elsewhere' (◦) or nil."
           (should-not (plist-get (pi-deck-read-state) :agents))
           ;; Only the first save moves the old file away.
           (delete-file backup)
-          (pi-deck-new-tab "t")
+          (pi-deck-create-space dir "newer")
           (pi-deck-save-state)
           (should-not (file-exists-p backup)))))))
 
@@ -1465,270 +1549,53 @@ MARK is `bold' (shown in this tab), `elsewhere' (◦) or nil."
       (should (equal (pi-deck-server-display-name) "pi"))
       (should (equal (pi-deck-restart-command-line) '("emacs" "--daemon=/tmp/emacs1/pi"))))))
 
-(ert-deftest pi-deck-test-daemon-info-lines ()
+(ert-deftest pi-deck-test-daemon-info ()
   (pi-deck-test--with-deck
     (let ((lines (pi-deck-daemon-info-lines)))
       (should (string-match-p (format "pid %d" (emacs-pid)) (car lines)))
       (should (string-match-p "live Pi sessions 0" (car lines)))
-      (should (string-match-p "orchestration" (cadr lines))))))
-
-;;;; Orchestration
-
-(ert-deftest pi-deck-test-orchestration-workers-nest-under-parent ()
-  (require 'pi-orchestration)
-  (pi-deck-test--with-deck
-    (pi-deck-create-space dir "space")
-    (let* ((pi-orchestration--targets (make-hash-table :test 'equal))
-           (parent (pi-deck-test--session dir "root")))
-      (unwind-protect
-          (progn
-            (pi-orchestration--start
-             (list :id "panel-1" :endpoint "test"
-                   :spec (list :kind "shell" :name "build" :cwd "/tmp/"
-                               :parent (list :id (buffer-name parent))
-                               :argv ["/bin/sh" "-c" "read line"])))
-            (let ((panel (pi-deck-agent (plist-get (pi-orchestration--target "panel-1") :buffer))))
-              (should panel)
-              (should (eq (pi-deck-agent-parent panel) parent))
-              (should (equal (pi-deck-agent-target panel) "panel-1"))
-              (should (equal (pi-deck-agent-space panel) "space"))
-              (should-not (pi-deck--agent-record panel (pi-deck-tab-index)))
-              (with-current-buffer (pi-deck-overview-buffer)
-                (pi-deck-overview-refresh)
-                (should (string-match-p "└ build " (buffer-string))))))
-        (pi-orchestration--close "panel-1")))))
-
-(ert-deftest pi-deck-test-panels-show-in-parent-space-and-close ()
-  (require 'pi-orchestration)
-  (pi-deck-test--with-deck
-    (pi-deck-create-space dir "space")
-    (let* ((pi-orchestration--targets (make-hash-table :test 'equal))
-           (parent (pi-deck-test--session dir "root"))
-           (start (lambda (id)
-                    (pi-orchestration--start
-                     (list :id id :endpoint "test"
-                           :spec (list :kind "shell" :name id :cwd "/tmp/"
-                                       :parent (list :id (buffer-name parent))
-                                       :argv ["/bin/sh" "-c" "read line"])))
-                    (plist-get (pi-orchestration--target id) :buffer))))
-      (unwind-protect
-          (progn
-            ;; The parent is on screen: the panel opens below it, unfocused.
-            (switch-to-buffer parent)
-            (let ((panel (funcall start "p1")))
-              (should (pi-deck-test--wait (lambda () (get-buffer-window panel))))
-              (should (eq (window-buffer) parent))
-              (pi-orchestration--close "p1")
-              (should (= 1 (length (window-list nil 'no-minibuf)))))
-            ;; The parent is not on screen: a background tab of its space.
-            (switch-to-buffer "*scratch*")
-            (let* ((count (length (tab-bar-tabs)))
-                   (current (tab-bar--current-tab-index))
-                   (panel (funcall start "p2")))
-              (should (pi-deck-test--wait (lambda () (= (length (tab-bar-tabs)) (1+ count)))))
-              (should (= (tab-bar--current-tab-index) current))
-              (let ((tab (nth (1+ current) (tab-bar-tabs))))
-                (should (equal (pi-deck--tab-group tab) "space"))
-                (should (memq panel (pi-deck--tab-buffers tab (selected-frame)))))
-              (pi-orchestration--close "p2")
-              (should (= (length (tab-bar-tabs)) count))))
-        (maphash (lambda (id _) (pi-orchestration--close id t)) pi-orchestration--targets)))))
-
-(ert-deftest pi-deck-test-closed-workers-are-hidden-and-readable ()
-  (pi-deck-test--with-deck
-    (pi-deck-create-space dir "space")
-    (let* ((parent (pi-deck-test--session dir "root"))
-           (worker (pi-deck-test--session dir "do-1"))
-           (file (expand-file-name "do-1.jsonl" dir))
-           opened)
-      (with-temp-file file
-        (insert "{\"type\":\"session\",\"version\":3,\"id\":\"s-1\",\"cwd\":\"/tmp\"}\n"))
-      (setf (pi-deck-agent-parent (pi-deck-agent worker)) parent
-            (pi-deck-agent-target (pi-deck-agent worker)) "t-1")
-      (let ((pilish-quit-without-confirmation t))
-        (delete-process (pilish-session-process worker))
-        (kill-buffer (pilish-session-input-buffer worker))
-        (kill-buffer worker))
-      (should-not (cl-find "do-1" (pi-deck-agents) :key #'pi-deck-agent-name :test #'equal))
-      (should (equal (mapcar (lambda (record) (plist-get record :name))
-                             (pi-deck-finished-workers parent))
-                     '("do-1")))
-      (with-current-buffer (pi-deck-overview-buffer)
-        (pi-deck-overview-refresh)
-        (goto-char (point-min))
-        (should (search-forward "1 finished worker" nil t))
-        (should-not (string-match-p "✓ do-1" (buffer-string)))
-        (pi-deck-overview-jump)
-        (should (search-forward "✓ do-1" nil t))
-        (cl-letf (((symbol-function 'pilish-open-subagent-snapshot)
-                   (lambda (target) (setq opened target))))
-          (pi-deck-overview-jump)))
-      (should (equal (pilish--snapshot-target-session-id opened) "s-1"))
-      (should (equal (pilish--snapshot-target-file opened) "do-1.jsonl"))
-      ;; The sidebar folds them into the same row.
-      (with-current-buffer (pi-deck-overview-buffer t)
-        (pi-deck-overview-refresh)
-        (should (string-match-p "▸ 1 finished worker" (buffer-string)))
-        (should-not (string-match-p "do-1" (buffer-string))))
-      ;; Closing the parent forgets its workers.
-      (let ((pilish-quit-without-confirmation t))
-        (delete-process (pilish-session-process parent))
-        (kill-buffer parent))
-      (should-not pi-deck--finished-workers))))
-
-(ert-deftest pi-deck-test-overview-rows-are-clickable ()
-  (pi-deck-test--with-deck
-    (pi-deck-create-space dir "space")
-    (let ((chat (pi-deck-test--session dir "a")) jumped popped)
-      (pi-deck-root-show)
-      (with-current-buffer (pi-deck-overview-buffer)
-        (pi-deck-overview-refresh)
-        (let* ((row (text-property-any (point-min) (point-max) 'pi-deck-agent (pi-deck-agent chat)))
-               (header (next-single-property-change (point-min) 'pi-deck-space))
-               (fold (text-property-any header (point-max) 'pi-deck-button 'fold)))
-          (should (eq (get-text-property row 'mouse-face) 'highlight))
-          (should (eq (keymap-lookup (get-text-property row 'keymap) "<mouse-1>")
-                      #'pi-deck-overview-mouse-1))
-          (cl-letf (((symbol-function 'pi-deck-jump) (lambda (agent) (setq jumped agent)))
-                    ((symbol-function 'pi-deck-popup) (lambda (menu &rest _) (setq popped menu))))
-            (pi-deck-overview-mouse-1 (pi-deck-test--click (selected-window) row))
-            (should (eq jumped (pi-deck-agent chat)))
-            ;; mouse-3 opens the row's menu.
-            (pi-deck-overview-mouse-3 (pi-deck-test--click (selected-window) row 'mouse-3))
-            (should (equal (keymap-prompt popped) "a")))
-          ;; The arrow folds the space.
-          (pi-deck-overview-mouse-1 (pi-deck-test--click (selected-window) fold))
-          (should (member "space" pi-deck-overview--collapsed))))
-      ;; The header's name visits the space.
-      (with-current-buffer (pi-deck-overview-buffer)
-        (pi-deck-overview-mouse-1
-         (pi-deck-test--click (selected-window)
-                              (+ 4 (next-single-property-change (point-min) 'pi-deck-space)))))
-      (should (equal (pi-deck-current-space) "space")))))
-
-(ert-deftest pi-deck-test-sidebar-default-and-saved-toggle ()
-  (pi-deck-test--with-deck
-    (setq pi-deck-sidebar t)
-    (pi-deck-create-space dir "space")
-    (should (get-buffer-window pi-deck-sidebar-buffer-name))
-    (pi-deck-new-tab "second")
-    (should (get-buffer-window pi-deck-sidebar-buffer-name))
-    (pi-deck-root-show)
-    (should-not (get-buffer-window pi-deck-sidebar-buffer-name))
-    (pi-deck-root)
-    (pi-deck-sidebar-toggle)
-    (should-not (get-buffer-window pi-deck-sidebar-buffer-name))
-    (setq pi-deck-sidebar t)
-    (pi-deck-load-preferences)
-    (should-not pi-deck-sidebar)))
-
-(ert-deftest pi-deck-test-key-sheet-lists-live-bindings ()
-  (pi-deck-test--with-deck
-    (let ((pi-deck-key-sheet t)
-          (pi-deck-key-sheet-substitutions '((delete-other-windows . pi-deck-test-maximize)))
-          (saved (keymap-global-lookup "C-c d"))
-          ran)
-      (keymap-global-set "C-c d" pi-deck-command-map)
-      (keymap-global-set "C-c w m" #'pi-deck-test-maximize)
-      (defalias 'pi-deck-test-maximize #'ignore)
-      (unwind-protect
-          (progn
-            (pi-deck-key-sheet-invalidate)
-            (pi-deck-root-show)
-            (with-current-buffer (pi-deck-overview-buffer)
-              (pi-deck-overview-refresh (current-buffer))
-              (let ((text (buffer-substring-no-properties (point-min) (point-max))))
-                (should (string-match-p "^Keys" text))
-                (should (string-match-p "C-c d a +new agent" text))
-                (should (string-match-p "C-c d 1…9 +tab N" text))
-                (should (string-match-p "C-c d = +repair pairs" text))
-                (should (string-match-p "C-c C-c +send" text))
-                (should (string-match-p "0…9 +choice N" text))
-                ;; A menu-only command is reached through the menu.
-                (should (string-match-p "C-c d m D +restart daemon" text))
-                ;; The substitution's key replaces `delete-other-windows'.
-                (should (string-match-p "C-c w m +maximize" text)))
-              ;; Cached: the same layout until keymaps change.
-              (should (eq (pi-deck-key-sheet-string 79) (pi-deck-key-sheet-string 79)))
-              (keymap-set pi-deck-command-map "a" nil)
-              (keymap-set pi-deck-command-map "c" #'pi-deck-new-agent)
-              (unwind-protect
-                  (progn
-                    (pi-deck-test--refresh-interactively)
-                    (should (string-match-p "C-c d c +new agent" (buffer-string))))
-                (keymap-set pi-deck-command-map "c" nil)
-                (keymap-set pi-deck-command-map "a" #'pi-deck-new-agent))
-              ;; Every line fits 80 columns.
-              (goto-char (point-min))
-              (pi-deck-key-sheet-invalidate)
-              (pi-deck-overview-refresh (current-buffer))
-              (dolist (line (split-string (pi-deck-key-sheet-string 79) "\n"))
-                (should (<= (string-width line) 79)))
-              ;; Clicking an entry runs its command.
-              (let ((entry (text-property-any (point-min) (point-max)
-                                              'pi-deck-key-command 'pi-deck-goto)))
-                (should entry)
-                (should (eq (keymap-lookup (get-text-property entry 'keymap) "<mouse-1>")
-                            #'pi-deck-key-sheet-mouse-run))
-                (cl-letf (((symbol-function 'pi-deck-goto)
-                           (lambda () (interactive) (setq ran t))))
-                  (pi-deck-key-sheet-mouse-run
-                   (list 'mouse-1 (list (get-buffer-window) entry '(0 . 0) 0 nil
-                                        entry '(0 . 0) nil '(0 . 0) '(1 . 1))))))
-              (should ran)
-              ;; `h' hides the sheet and saves the choice.
-              (pi-deck-key-sheet-toggle)
-              (should-not (string-match-p "^Keys" (buffer-string)))
-              (setq pi-deck-key-sheet t)
-              (pi-deck-load-preferences)
-              (should-not pi-deck-key-sheet)))
-        (keymap-global-set "C-c d" saved)
-        (keymap-global-unset "C-c w m")
-        (pi-deck-key-sheet-invalidate)))))
+      (should (string-match-p "orchestration" (cadr lines)))
+      (pi-deck-daemon-info)
+      (with-current-buffer "*pi-deck daemon*"
+        (should (equal (string-trim-right (buffer-string)) (string-join lines "\n")))))))
 
 (ert-deftest pi-deck-test-show-session-uses-or-creates-its-space ()
   (pi-deck-test--with-deck
     (should (eq pi-orchestration-show-session-function #'pi-deck-show-session))
-    (let ((other (file-name-as-directory (make-temp-file "pi-deck-switch-" t))))
+    (let* ((other (file-name-as-directory (make-temp-file "pi-deck-switch-" t)))
+           (other-space (file-name-nondirectory (directory-file-name other))))
       (cl-letf (((symbol-function 'pi-deck--client-frames) (lambda () (list (selected-frame))))
                 ((symbol-function 'select-frame-set-input-focus) #'ignore))
-        ;; A directory without a space gets one, with a tab holding the pair.
+        ;; A directory without a space gets one, showing the pair.
         (let ((agent (pi-deck-show-session (pi-deck-test--session other "switched"))))
-          (should (equal (pi-deck-agent-assigned-space agent) (file-name-nondirectory (directory-file-name other))))
-          (should (equal (pi-deck-current-space) (pi-deck-agent-assigned-space agent)))
+          (should (equal (pi-deck-agent-assigned-space agent) other-space))
+          (should (equal (pi-deck-current-space) other-space))
           (should (eq (window-buffer) (pilish-session-input-buffer (pi-deck-agent-buffer agent))))
           (should (get-buffer-window (pi-deck-agent-buffer agent))))
-        ;; An existing space for the directory gets a new tab, from the root too.
+        ;; An existing space for the directory shows it, from elsewhere too.
         (pi-deck-create-space dir "space")
-        (pi-deck-root-show)
-        (let* ((tabs (length (pi-deck--space-tab-entries "space")))
-               (agent (pi-deck-show-session (pi-deck-test--session dir "second"))))
+        (pi-deck-select-space other-space)
+        (let ((agent (pi-deck-show-session (pi-deck-test--session dir "second"))))
           (should (equal (pi-deck-agent-assigned-space agent) "space"))
           (should (equal (pi-deck-current-space) "space"))
-          (should (= (length (pi-deck--space-tab-entries "space")) (1+ tabs)))
           (should (eq (window-buffer) (pilish-session-input-buffer (pi-deck-agent-buffer agent))))
-          ;; Showing it again selects its tab instead of adding one.
-          (pi-deck-root-show)
-          (pi-deck-show-session (pi-deck-agent-buffer agent))
-          (should (= (length (pi-deck--space-tab-entries "space")) (1+ tabs)))))
+          ;; Showing it again focuses it without adding panes.
+          (let ((count (length (window-list nil 'no-minibuf))))
+            (pi-deck-select-space other-space)
+            (pi-deck-show-session (pi-deck-agent-buffer agent))
+            (should (equal (pi-deck-current-space) "space"))
+            (should (= (length (window-list nil 'no-minibuf)) count)))
+          (should (= (length (tab-bar-tabs)) 2))))
       ;; Without a client frame, the next frame shows it.
       (cl-letf (((symbol-function 'pi-deck--client-frames) (lambda () nil)))
         (let ((agent (pi-deck-show-session (pi-deck-test--session other "later"))))
-          (should (eq pi-deck--pending-reveal (pi-deck-agent-buffer agent)))
-          (pi-deck-root-show)))
+          (should (eq pi-deck--pending-reveal (pi-deck-agent-buffer agent)))))
       (cl-letf (((symbol-function 'pi-deck--client-frames) (lambda () (list (selected-frame)))))
         (pi-deck-setup-frame (selected-frame)))
       (should-not pi-deck--pending-reveal)
+      (should (equal (pi-deck-current-space) other-space))
       (should (string-match-p "later" (buffer-name (window-buffer))))
       (delete-directory other t))))
-
-(ert-deftest pi-deck-test-new-frame-lands-on-root ()
-  (pi-deck-test--with-deck
-    (switch-to-buffer (pi-deck-initial-buffer))
-    (should (equal (buffer-name) pi-deck-overview-buffer-name))
-    (pi-deck-land-on-root)
-    (should (pi-deck-root-tab-p (tab-bar--current-tab-find)))
-    (should (= 1 (length (pi-deck--tabs))))))
 
 (ert-deftest pi-deck-test-state-saves-after-changes ()
   (pi-deck-test--with-deck
@@ -1749,10 +1616,6 @@ MARK is `bold' (shown in this tab), `elsewhere' (◦) or nil."
         (should (pi-deck-test--wait (lambda () (file-exists-p pi-deck-state-file))))
         (should (cl-find "a" (plist-get (pi-deck-read-state) :agents)
                          :key (lambda (record) (plist-get record :name)) :test #'equal))))))
-
-(defun pi-deck-test--refresh-interactively ()
-  "Refresh the current overview as \\[pi-deck-overview-refresh] does."
-  (funcall-interactively #'pi-deck-overview-refresh))
 
 (provide 'pi-deck-test)
 ;;; pi-deck-test.el ends here
