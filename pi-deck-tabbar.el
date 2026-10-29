@@ -350,7 +350,10 @@ keep their names."
 (defun pi-deck-tab-bar-apply ()
   "Apply pi-deck's tab bar settings."
   (setq tab-bar-format (pi-deck--tab-bar-format)
-        tab-bar-tab-name-function #'pi-deck-tab-name)
+        tab-bar-tab-name-function #'pi-deck-tab-name
+        ;; pi-deck fits tab names itself; tab-bar's auto width would cut
+        ;; labels at a fixed width, ✕ included.
+        tab-bar-auto-width nil)
   (force-mode-line-update t))
 
 (defun pi-deck-tab-bar-enable ()
@@ -359,6 +362,7 @@ keep their names."
     (setq pi-deck--saved-tab-bar-settings
           (list (cons 'tab-bar-format tab-bar-format)
                 (cons 'tab-bar-tab-name-function tab-bar-tab-name-function)
+                (cons 'tab-bar-auto-width tab-bar-auto-width)
                 (cons 'bindings (mapcar (lambda (binding)
                                           (cons (car binding) (keymap-lookup tab-bar-map (car binding))))
                                         pi-deck--tab-bar-bindings)))))

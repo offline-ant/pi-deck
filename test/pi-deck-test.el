@@ -696,8 +696,11 @@ MARK is `bold' (shown in this tab), `elsewhere' (◦) or nil."
           (let* ((labels (mapcar (lambda (item) (nth 1 item))
                                  (cl-remove-if-not (lambda (item) (string-match-p "\\`\\(current-tab\\|tab-[0-9]+\\)\\'" (symbol-name (car item))))
                                                    (pi-deck-test--tab-bar-items))))
-                 (total (apply #'+ (mapcar (lambda (item) (string-width (nth 2 item)))
-                                           (tab-bar-format-list tab-bar-format)))))
+                 ;; What tab-bar draws: after its optional auto width pass.
+                 (drawn (let ((items (tab-bar-format-list tab-bar-format)))
+                          (if tab-bar-auto-width (tab-bar-auto-width items) items)))
+                 (total (apply #'+ (mapcar (lambda (item) (string-width (nth 2 item))) drawn))))
+            (should (cl-some (lambda (item) (string-match-p "n… ✕ \\'" (nth 2 item))) drawn))
             (should (= (length labels) 2))
             (should (cl-some (lambda (label) (string-match-p "n… ✕ \\'" label)) labels))
             (dolist (label labels)
