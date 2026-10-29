@@ -372,13 +372,25 @@ Leaving work (working or blocked to idle) while invisible makes it done."
   (when (buffer-live-p chat-buffer)
     (pi-deck-refresh-agent chat-buffer)))
 
+(defun pi-deck--main-window (&optional frame)
+  "Return FRAME's main-area window: the selected one unless it is a side window.
+From a side window such as the sidebar, return the main view: the most
+recently used Pilish chat and input pair, else the most recently used
+window outside side windows (such as a terminal).  Side windows cannot be
+split or hold panes."
+  (let ((selected (frame-selected-window frame)))
+    (if (not (window-parameter selected 'window-side))
+        selected
+      (let ((windows (sort (cl-remove-if (lambda (window) (window-parameter window 'window-side))
+                                         (window-list frame 'no-mini))
+                           :key #'window-use-time :reverse t)))
+        (or (cl-find-if #'pilish-window-pair windows) (car windows) selected)))))
+
 (defun pi-deck--select-ordinary-window ()
-  "Select a window that is no side window when the selected one is.
+  "Select the main-area window when the selected one is a side window.
 `delete-other-windows' and new tabs fail in side windows (the sidebar)."
   (when (window-parameter nil 'window-side)
-    (when-let* ((window (cl-find-if-not (lambda (window) (window-parameter window 'window-side))
-                                        (window-list nil 'no-mini))))
-      (select-window window))))
+    (select-window (pi-deck--main-window))))
 
 (defun pi-deck--single-window ()
   "Reduce the tab to one plain window besides side windows and select it.

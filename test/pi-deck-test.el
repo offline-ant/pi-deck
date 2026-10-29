@@ -441,6 +441,78 @@
     (pi-deck-sidebar-toggle)
     (should-not (get-buffer-window pi-deck-sidebar-buffer-name))))
 
+(defun pi-deck-test--main-windows ()
+  "Return the selected frame's live windows outside side windows."
+  (cl-remove-if (lambda (window) (window-parameter window 'window-side))
+                (window-list nil 'no-minibuf)))
+
+(ert-deftest pi-deck-test-sidebar-click-replaces-main-view ()
+  (pi-deck-test--with-deck
+    (pi-deck-create-space dir "space")
+    (let* ((parent (pi-deck-test--session dir "parent"))
+           (worker (pi-deck-test--session dir "worker"))
+           (click (lambda (window position)
+                    (list 'mouse-1 (list window position '(0 . 0) 0 nil
+                                         position '(0 . 0) nil '(0 . 0) '(1 . 1))))))
+      (setf (pi-deck-agent-parent (pi-deck-agent worker)) parent)
+      (pi-deck--display-agent-in-window (pi-deck-agent parent) (selected-window))
+      (pi-deck-sidebar-toggle)
+      (let* ((sidebar (get-buffer-window pi-deck-sidebar-buffer-name))
+             (main (pi-deck-test--main-windows))
+             (row (with-current-buffer (window-buffer sidebar)
+                    (pi-deck-overview-refresh)
+                    (text-property-any (point-min) (point-max)
+                                       'pi-deck-agent (pi-deck-agent worker)))))
+        (should row)
+        ;; A recently used terminal-like window below stays; the chat pair is
+        ;; the main view.
+        (let ((other (split-window (pi-deck--pane-of (pi-deck--pane-window)) nil 'below)))
+          (set-window-buffer other (get-buffer-create "*pi-deck-test-other*"))
+          (select-window other)
+          (setq main (pi-deck-test--main-windows)))
+        ;; Clicking a worker row from the selected sidebar replaces the main view.
+        (select-window sidebar)
+        (pi-deck-overview-mouse-jump (funcall click sidebar row))
+        (should (eq (pilish-session-chat-buffer (window-buffer)) worker))
+        (should (get-buffer-window "*pi-deck-test-other*"))
+        (should (= (length (pi-deck-test--main-windows)) (length main)))
+        (should (eq (get-buffer-window pi-deck-sidebar-buffer-name) sidebar))
+        (should-not (get-buffer-window parent))
+        ;; `o' / middle-click shows the row in the main view, keeping the sidebar selected.
+        (select-window sidebar)
+        (with-current-buffer (window-buffer sidebar)
+          (goto-char (text-property-any (point-min) (point-max)
+                                        'pi-deck-agent (pi-deck-agent parent)))
+          (pi-deck-overview-show))
+        (should (eq (selected-window) sidebar))
+        (should (get-buffer-window parent))
+        (should-not (get-buffer-window worker))
+        (should (= (length (pi-deck-test--main-windows)) (length main)))
+        ;; Pane commands from the sidebar act on the main view.
+        (select-window sidebar)
+        (pi-deck-split-right)
+        (should-not (window-parameter nil 'window-side))
+        (should (> (length (pi-deck-test--main-windows)) (length main)))
+        (should (eq (get-buffer-window pi-deck-sidebar-buffer-name) sidebar))))))
+
+(ert-deftest pi-deck-test-sidebar-new-agent-button ()
+  (pi-deck-test--with-deck
+    (pi-deck-create-space dir "space")
+    (pi-deck-sidebar-toggle)
+    (let ((sidebar (get-buffer-window pi-deck-sidebar-buffer-name))
+          started)
+      (select-window sidebar)
+      (with-current-buffer (window-buffer sidebar)
+        (pi-deck-overview-refresh)
+        (goto-char (text-property-any (point-min) (point-max)
+                                      'pi-deck-key-command #'pi-deck-sidebar-new-agent))
+        (should (looking-at-p " \\+ new agent"))
+        (should (eq (get-text-property (point) 'mouse-face) 'highlight))
+        (cl-letf (((symbol-function 'pi-deck-new-agent)
+                   (lambda (name &rest _) (setq started (list name (pi-deck-current-space))))))
+          (pi-deck-overview-jump)))
+      (should (equal started '(nil "space"))))))
+
 (ert-deftest pi-deck-test-tab-bar-cell-and-icons ()
   (pi-deck-test--with-deck
     (pi-deck-create-space dir "space")

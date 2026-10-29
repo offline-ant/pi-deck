@@ -47,8 +47,14 @@ Dependency order: core → spaces → workers → keys → overview → goto/not
   (`pilish-split-input-window`, `pilish-dissolve-window-pair`,
   `pilish-repair-window-pairs`) and never pairs windows itself; split and zoom
   panes, never their halves. `pi-deck-mode` turns on `pilish-window-pairing-mode`.
-- Select a non-side window (`pi-deck--select-ordinary-window`) before
-  `delete-other-windows`; `pi-deck--single-window` reduces a tab to one plain window.
+- Never split, display in or delete the selected window when it may be a side window
+  (the sidebar). Commands act on `pi-deck--main-window` / `pi-deck--pane-window` (the
+  most recently used chat pair, else other non-side window, when a side window is
+  selected) and `pi-deck--split-pane` (splits with the pane selected, so the new window
+  never shows the sidebar). `get-largest-window`/`get-mru-window` skip dedicated pair
+  windows unless asked; use these helpers instead. Select a non-side window
+  (`pi-deck--select-ordinary-window`) before `delete-other-windows`;
+  `pi-deck--single-window` reduces a tab to one plain window.
 - Only root and space tabs are saved or mirrored; tabs outside spaces stay
   frame-local.
 - State saves are event-driven (`pi-deck-schedule-save`): never add

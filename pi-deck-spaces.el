@@ -465,8 +465,18 @@ to AGENT.  A terminal takes the place of WINDOW's whole pair."
     window))
 
 (defun pi-deck--pane-window ()
-  "Return the selected pane's window: a pair's chat window, else the selected one."
-  (car (or (pilish-window-pair (selected-window)) (list (selected-window)))))
+  "Return the selected pane's window: a pair's chat window, else the window.
+From a side window such as the sidebar, the pane is the main-area window
+the user came from (see `pi-deck--main-window')."
+  (let ((window (pi-deck--main-window)))
+    (car (or (pilish-window-pair window) (list window)))))
+
+(defun pi-deck--largest-pane-window ()
+  "Return the largest window outside side windows, pair halves included."
+  (car (sort (cl-remove-if (lambda (window) (window-parameter window 'window-side))
+                           (window-list nil 'no-mini))
+             :key (lambda (window) (* (window-total-width window) (window-total-height window)))
+             :reverse t)))
 
 (defun pi-deck--pane-of (window)
   "Return the window holding WINDOW's whole pane.
@@ -479,8 +489,10 @@ other WINDOW is its own pane."
 (defun pi-deck--split-pane (window direction)
   "Split the pane holding WINDOW in DIRECTION (`right' or `below') in half.
 Return the new live window.  Other panes keep their sizes, and a chat's
-input window stays attached to its chat."
-  (split-window (pi-deck--pane-of window) nil direction))
+input window stays attached to its chat.  The new window shows WINDOW's
+buffer, even when a side window such as the sidebar is selected."
+  (with-selected-window window
+    (split-window (pi-deck--pane-of window) nil direction)))
 
 (defun pi-deck--input-or-chat-window (agent)
   "Return the window to focus for AGENT: its input when shown, else its buffer."
@@ -496,8 +508,16 @@ Select the tab already showing it; otherwise use ACTION (default
   (let* ((tab-index (pi-deck-tab-index))
          (entry (pi-deck--agent-tab agent tab-index))
          (space (pi-deck-agent-space agent tab-index)))
-    (if entry
-        (pi-deck--select-tab-index (nth 1 entry))
+    (cond
+     ((get-buffer-window (pi-deck-agent-buffer agent)))
+     ;; From the sidebar, an agent of this space (or of none) replaces the
+     ;; main view instead of opening elsewhere.
+     ((and (window-parameter nil 'window-side)
+           (not (pi-deck-root-tab-p (tab-bar--current-tab-find)))
+           (or (null space) (equal space (pi-deck-current-space))))
+      (pi-deck--display-agent-in-window agent (pi-deck--pane-window)))
+     (entry (pi-deck--select-tab-index (nth 1 entry)))
+     (t
       (when (and space (not (equal space (pi-deck-current-space))))
         (pi-deck-select-space space))
       (when (pi-deck-root-tab-p (tab-bar--current-tab-find))
@@ -506,10 +526,10 @@ Select the tab already showing it; otherwise use ACTION (default
         ('tab (pi-deck--new-tab-in-space (pi-deck-current-space) (pi-deck-agent-name agent))
               (pi-deck--display-agent-in-window agent (selected-window)))
         ('window (pi-deck--display-agent-in-window agent (pi-deck--pane-window)))
-        (_ (let ((largest (get-largest-window)))
+        (_ (let ((largest (pi-deck--largest-pane-window)))
              (pi-deck--display-agent-in-window
               agent (pi-deck--split-pane largest (if (> (window-width largest) 160)
-                                                     'right 'below)))))))
+                                                     'right 'below))))))))
     (when-let* ((window (pi-deck--input-or-chat-window agent)))
       (select-window window))
     (pi-deck-mark-seen agent)))
@@ -596,8 +616,8 @@ With SPLIT (prefix argument), show it in a new window to the right."
          (buffer (pi-deck-start-shell (pi-deck--current-space-dir)
                                       (format "shell:%s" (or space "shell"))))
          (agent (pi-deck--track buffer 'shell))
-         (window (if split (split-window (pi-deck--pane-of (selected-window)) nil 'right)
-                   (selected-window))))
+         (window (if split (pi-deck--split-pane (pi-deck--pane-window) 'right)
+                   (pi-deck--pane-window))))
     (setf (pi-deck-agent-assigned-space agent) space)
     (select-window (pi-deck--display-agent-in-window agent window))
     agent))
@@ -605,33 +625,35 @@ With SPLIT (prefix argument), show it in a new window to the right."
 (defun pi-deck-split-right ()
   "Split the selected pane (a chat with its input counts as one) to the right."
   (interactive)
-  (select-window (pi-deck--split-pane (selected-window) 'right)))
+  (select-window (pi-deck--split-pane (pi-deck--pane-window) 'right)))
 
 (defun pi-deck-split-below ()
   "Split the selected pane (a chat with its input counts as one) below."
   (interactive)
-  (select-window (pi-deck--split-pane (selected-window) 'below)))
+  (select-window (pi-deck--split-pane (pi-deck--pane-window) 'below)))
 
 (defun pi-deck-zoom ()
   "Toggle zooming the selected pane within the current tab."
   (interactive)
   (let* ((tab (tab-bar--current-tab-find))
-         (saved (alist-get 'pi-deck-zoom (cdr tab))))
-    (if (and saved (eq (pi-deck--pane-of (selected-window)) (window-main-window)))
+         (saved (alist-get 'pi-deck-zoom (cdr tab)))
+         (pane (pi-deck--pane-of (pi-deck--main-window))))
+    (if (and saved (eq pane (window-main-window)))
         (progn (set-window-configuration saved)
                (setf (alist-get 'pi-deck-zoom (cdr tab) nil 'remove) nil))
       (setf (alist-get 'pi-deck-zoom (cdr tab)) (current-window-configuration))
-      (delete-other-windows (pi-deck--pane-of (selected-window))))))
+      (delete-other-windows pane))))
 
 (defun pi-deck-close-pane ()
   "Close the selected pane; a chat closes together with its input window.
 The tab's only pane shows its previous buffer instead."
   (interactive)
-  (if (eq (pi-deck--pane-of (selected-window)) (window-main-window))
-      (let ((window (pilish-dissolve-window-pair (selected-window))))
-        (select-window window)
-        (switch-to-prev-buffer window))
-    (delete-window (selected-window))))
+  (let ((window (pi-deck--main-window)))
+    (if (eq (pi-deck--pane-of window) (window-main-window))
+        (let ((window (pilish-dissolve-window-pair window)))
+          (select-window window)
+          (switch-to-prev-buffer window))
+      (delete-window window))))
 
 (defun pi-deck-repair-tab ()
   "Rebuild the current tab's agent panes.

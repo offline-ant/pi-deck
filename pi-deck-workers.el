@@ -203,6 +203,8 @@ Records of the buffer's own closed workers are dropped with it."
                        file (pi-deck--session-file-id file)
                        (file-name-directory file) (file-name-nondirectory file)))))
     (unless target (user-error "Session of %s is unavailable" (plist-get record :name)))
+    ;; Side windows cannot be split for the view.
+    (pi-deck--select-ordinary-window)
     (pilish-open-subagent-snapshot target)))
 
 (provide 'pi-deck-workers)

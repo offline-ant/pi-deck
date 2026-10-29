@@ -271,6 +271,12 @@
                (format "filter: %s · sort: %s · RET/click jump  o show  TAB fold  b/w/i/d/D/a filter  s sort  A answer  K stop  + space  N agent  E shell  h keys  m menu\n\n"
                        (or pi-deck-overview--filter "all") pi-deck-overview--sort)
                'face 'shadow)))
+    (when pi-deck-overview--compact
+      (insert (propertize " + new agent" 'face 'link
+                          'pi-deck-key-command #'pi-deck-sidebar-new-agent
+                          'mouse-face 'highlight 'keymap pi-deck-key-sheet-entry-map
+                          'help-echo "mouse-1, RET: start a Pi agent in this space")
+              "\n"))
     (when (and pi-deck-overview--compact pi-deck-overview--filter)
       (insert (propertize (format " filter: %s\n" pi-deck-overview--filter) 'face 'shadow)))
     (if (eq pi-deck-overview--sort 'priority)
@@ -354,13 +360,13 @@ closed worker, or fold."
     (pi-deck-overview-toggle-space)))
 
 (defun pi-deck-overview-show ()
-  "Show the agent at point in another window, keeping this view selected."
+  "Show the agent at point in another window, keeping this view selected.
+From the sidebar, the agent replaces the main view."
   (interactive)
   (let ((agent (pi-deck-overview--agent-at-point)))
     (save-selected-window
       (if pi-deck-overview--compact
-          (pi-deck--display-agent-in-window
-           agent (or (get-mru-window nil nil t) (selected-window)))
+          (pi-deck--display-agent-in-window agent (pi-deck--pane-window))
         (display-buffer (pi-deck-agent-buffer agent) '(display-buffer-pop-up-window))))
     (pi-deck-mark-seen agent)))
 
@@ -439,6 +445,13 @@ closed worker, or fold."
   (when-let* ((space (pi-deck-overview--space-at-point)))
     (pi-deck-select-space space))
   (call-interactively #'pi-deck-new-agent))
+
+(defun pi-deck-sidebar-new-agent ()
+  "Start a Pi agent in the current tab's space and show it in the main view.
+On a tab without a space, pick or create one first."
+  (interactive)
+  (pi-deck--enter-pane-space)
+  (pi-deck-new-agent nil))
 
 (defun pi-deck-overview-new-shell ()
   "Open a shell in the space at point (else a space read), and show it."

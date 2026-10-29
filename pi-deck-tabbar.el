@@ -108,7 +108,7 @@ Explicitly renamed tabs keep their names."
                      (selected-window)))
          ;; Side windows such as the sidebar do not name tabs.
          (window (if (window-parameter window 'window-side)
-                     (or (get-mru-window nil nil t) window)
+                     (pi-deck--main-window (window-frame window))
                    window))
          (buffer (window-buffer window))
          (agent (pi-deck-agent (or (pilish-session-chat-buffer buffer) buffer))))

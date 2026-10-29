@@ -119,7 +119,7 @@ With a prefix argument, first choose a STATUS to narrow to."
 
 (defun pi-deck--current-agent ()
   "Return the agent shown in the selected window, or nil."
-  (let ((buffer (window-buffer)))
+  (let ((buffer (window-buffer (pi-deck--main-window))))
     (pi-deck-agent (or (pilish-session-chat-buffer buffer) buffer))))
 
 (defun pi-deck--cycle (agents step)

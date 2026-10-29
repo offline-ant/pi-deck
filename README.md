@@ -132,7 +132,16 @@ sessions" links. The sidebar lists live agents only.
 | `m` `?` | menu |
 | `q` | back to the previous tab |
 
-The sidebar shows the same data compactly and uses the same keys.
+The sidebar shows the same data compactly and uses the same keys. Its
+top line, `+ new agent`, starts a Pi agent in the current tab's space
+(click or `RET`; on a tab without a space, pick or create one). From the
+sidebar, an agent of the current space (workers and panels included) that
+the tab does not show yet replaces the main view: the most recently used
+chat pair, else the most recently used other window; the sidebar and
+other panes stay. Agents already on screen are focused, and agents of
+other spaces open in their space. `o` and `mouse-2` show the agent in the
+main view and keep the sidebar selected. Pane commands (`SPC d |`, `-`,
+`z`, `x`, layouts) run from the sidebar act on the main view.
 
 ### Key sheet
 
@@ -161,7 +170,7 @@ click a tab to select it, a space (group) name to visit it, `mouse-2` or the
 tab's `x` to close it, `mouse-3` for its menu; click the status cell to jump
 to the next agent needing attention (else the overview). In the overview and
 sidebar, click a row to jump to its agent, `mouse-2` shows it in another
-window, and clicking a space header (or a closed-workers line) folds it.
+window (from the sidebar: in the main view), and clicking a space header (or a closed-workers line) folds it.
 
 ## Panels
 
