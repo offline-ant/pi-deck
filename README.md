@@ -296,16 +296,28 @@ periodically; `pi-deck-save-delay`) writes
 tabs with window layouts (tabs outside spaces stay local to their frame), Pi sessions with their session files, and terminals with
 directory and command. `pi-deck-restore-state` resumes Pi sessions with
 `pi --session FILE` (history included), restarts terminals, and recreates
-tabs of spaces the frame lacks. Orchestration workers and panels belong to
-their parent Pi and are not restored. Set `pi-deck-auto-restore` to restore
-whenever the mode starts.
+tabs of spaces the frame lacks. Sessions start `pi-deck-restore-interval`
+seconds apart (0.15); tabs follow once all exist. Orchestration workers and
+panels belong to their parent Pi and are not restored; sessions you closed
+stay closed.
+
+The state file belongs to one Emacs server, recorded by its socket. That
+server restores it whenever it starts, however it stopped (restart, `kill-emacs`,
+crash, reboot), like Herdr's agent resume; `pi-deck-auto-restore` nil turns this
+off (the first save then keeps the old file as `state.eld.bak`). A daemon
+claims the file only once its server runs, after the init file, so restored
+sessions get the Emacs orchestration environment. Every other Emacs (no
+server, another daemon such as a disposable test daemon) neither restores nor
+saves the file automatically; an explicit `pi-deck-save-state` takes it over.
+A file recording no owner is restored by nobody until such a save. The root
+overview's daemon lines say when this Emacs does not own the file.
 
 `pi-deck-restart-daemon` lists the Pi sessions and terminals that will stop,
 asks for confirmation, saves the state, starts a detached helper that waits
 for this Emacs to exit and then runs `pi-deck-restart-command` (default
 `emacs --daemon=<socket>`, the running server's absolute socket file, so the
 replacement listens exactly where clients connect), and exits. The new daemon restores the state
-when `pi-deck-mode` starts. In-flight Pi turns are interrupted; sessions
+like any start. In-flight Pi turns are interrupted; sessions
 resume from disk. Reattach clients afterwards.
 
 ## Notable options
@@ -329,7 +341,8 @@ like Pi's editor).
 `pi-deck-key-sheet`, `pi-deck-key-sheet-groups`, `pi-deck-key-sheet-substitutions`,
 `pi-deck-show-panels`, `pi-deck-panel-height`,
 `pi-deck-finished-workers-limit`, `pi-deck-save-delay`, `pi-deck-status-icons`,
-`pi-deck-mirror-new-frames`, `pi-deck-restart-command`,
+`pi-deck-mirror-new-frames`, `pi-deck-restart-command`, `pi-deck-auto-restore`,
+`pi-deck-restore-interval`,
 `pi-deck-refresh-interval`.
 
 Other packages add tab bar buttons after the status cell through
@@ -347,7 +360,7 @@ calls COMMAND with the click as its key sequence, so an
 
 ```sh
 make test     # byte-compile (warnings are errors) + ERT, emacs -Q --batch
-make smoke    # real shell pane, real Pi + faux provider in a disposable daemon, incl. restart
+make smoke    # real shell pane, real Pi + faux provider in a disposable daemon, incl. restart and kill+start restore
 ```
 
 Dependencies (ghostel with its prebuilt native module, Pilish's packages)

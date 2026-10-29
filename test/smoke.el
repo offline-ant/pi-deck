@@ -10,7 +10,9 @@
 ;; (faux provider only) through working, done, blocked and answered states
 ;; and saves the deck.  test/smoke.sh then
 ;; restarts the daemon through `pi-deck-restart-daemon'; phase 2 checks that
-;; the space and session were restored from the session file and still work.
+;; the space and session were restored from the session file, with the
+;; Emacs orchestration environment, and still work.  Phase 3 checks the same
+;; after a plain `kill-emacs' and a fresh daemon start.
 
 ;;; Code:
 
@@ -172,20 +174,43 @@ answer while it is still evaluating the request that runs the check."
                              (condition-case err (pi-deck-smoke-panels suffix)
                                (error (error-message-string err)))))))
 
-(defun pi-deck-smoke-phase2 (session-file)
-  "Check the restored deck resumed SESSION-FILE and still answers."
+(defun pi-deck-smoke--restored-agent (session-file history)
+  "Return the restored main agent once it shows HISTORY from SESSION-FILE.
+Checks that every restored Pi process got the Emacs orchestration
+environment, which needs the server running before the restore."
+  (pi-deck-smoke--wait "restore to finish" (lambda () (null pi-deck--restoring)))
   (unless (pi-deck-space "smoke") (error "Space was not restored"))
   (let* ((agent (or (cl-find-if (lambda (agent) (equal (pi-deck-agent-session-name agent) "main"))
                                 (pi-deck-agents))
                     (error "Session was not restored: %S" (mapcar #'pi-deck-agent-name (pi-deck-agents)))))
          (chat (pi-deck-agent-buffer agent)))
     (pi-deck-smoke--wait "restored history"
-                         (lambda () (string-match-p "faux reply: hello deck"
-                                                    (pi-deck-smoke--chat-text chat))))
+                         (lambda () (string-match-p history (pi-deck-smoke--chat-text chat))))
     (pi-deck-smoke--wait "restored session file"
                          (lambda () (equal (pi-deck-agent-session-file agent) session-file)))
     (unless (equal (pi-deck-agent-assigned-space agent) "smoke")
       (error "Restored agent lost its space"))
+    ;; Every restored session, including the first (started at once).
+    (dolist (other (pi-deck-agents))
+      (when (eq (pi-deck-agent-kind other) 'pi)
+        (let ((environ (with-temp-buffer
+                         (insert-file-contents-literally
+                          (format "/proc/%d/environ" (process-id (pi-deck-agent-process other))))
+                         (split-string (buffer-string) "\0" t))))
+          (unless (member "PI_ORCHESTRATION_HOST=emacs" environ)
+            (error "Restored session %s lacks the Emacs orchestration environment"
+                   (pi-deck-agent-name other))))))
+    agent))
+
+(defun pi-deck-smoke-phase3 (session-file)
+  "Check a daemon started after a plain `kill-emacs' restored SESSION-FILE."
+  (pi-deck-smoke--restored-agent session-file "faux reply: after restart")
+  (format "PASS3 %d agents" (length (pi-deck-agents))))
+
+(defun pi-deck-smoke-phase2 (session-file)
+  "Check the restored deck resumed SESSION-FILE and still answers."
+  (let* ((agent (pi-deck-smoke--restored-agent session-file "faux reply: hello deck"))
+         (chat (pi-deck-agent-buffer agent)))
     (pi-deck-smoke--submit chat "after restart")
     (pi-deck-smoke--wait "reply after restart"
                          (lambda () (and (eq (pi-deck-agent-state agent) 'idle)

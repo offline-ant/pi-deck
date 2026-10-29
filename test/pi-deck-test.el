@@ -42,6 +42,12 @@
           (pi-deck--pending-tabs nil)
           (pi-deck--last-tabs nil)
           (pi-deck-save-delay nil)
+          ;; This Emacs owns the temporary state file; restores run at once.
+          (pi-deck--state-claimed t)
+          (pi-deck--state-owner "/tmp/pi-deck-test-owner")
+          (pi-deck--state-backup-pending nil)
+          (pi-deck--restoring nil)
+          (pi-deck-restore-interval 0)
           (pi-deck--finished-workers nil)
           (pi-deck--pending-reveal nil)
           (pi-deck-new-space-action 'dired)
@@ -1200,10 +1206,127 @@ MARK is `bold' (shown in this tab), `elsewhere' (◦) or nil."
       (should (string-match-p "exec emacs --daemon.=/tmp/pi-deck-test-sockets/pi-test\\'"
                               (nth 4 helper)))
       (should (file-exists-p pi-deck-state-file))
-      (should (file-exists-p (pi-deck--restore-marker)))
-      (cl-letf (((symbol-function 'pi-deck-restore-state) (lambda (&rest _) 'restored)))
-        (pi-deck-restore-if-pending))
-      (should-not (file-exists-p (pi-deck--restore-marker))))))
+      (should (equal (plist-get (pi-deck-read-state) :owner) "/tmp/pi-deck-test-owner")))))
+
+(defun pi-deck-test--write-state (file owner names dir)
+  "Write a state to FILE owned by OWNER with Pi sessions NAMES in DIR."
+  (with-temp-file file
+    (prin1 (list :version 1 :owner owner
+                 :spaces (list (list :name "space" :dir (file-name-as-directory dir)))
+                 :tabs nil
+                 :agents (mapcar (lambda (name)
+                                   (list :kind 'pi :buffer (format "*restored-%s*" name)
+                                         :dir dir :name name :session-file nil :space "space"))
+                                 names))
+           (current-buffer))))
+
+(defmacro pi-deck-test--claiming (socket started &rest body)
+  "Run BODY with a running server on SOCKET, recording session names in STARTED."
+  (declare (indent 2))
+  `(cl-letf (((symbol-function 'pi-deck-server-socket) (lambda () ,socket))
+             ((symbol-function 'pilish-start-session)
+              (lambda (directory name &rest _)
+                (push name ,started)
+                (pi-deck-test--session directory name))))
+     (let ((pi-deck--state-claimed nil)
+           (pi-deck--state-owner nil))
+       ,@body)))
+
+(ert-deftest pi-deck-test-owner-restores-on-start ()
+  (pi-deck-test--with-deck
+    (let (started)
+      (pi-deck-test--write-state pi-deck-state-file "/s/pi" '("a" "b") dir)
+      (pi-deck-test--claiming "/s/pi" started
+        (pi-deck-claim-state)
+        (should (equal pi-deck--state-owner "/s/pi"))
+        (should (equal (reverse started) '("a" "b")))
+        (should (pi-deck-space "space"))
+        ;; Claiming happens once per Emacs.
+        (pi-deck-claim-state)
+        (should (= (length started) 2))))))
+
+(ert-deftest pi-deck-test-other-emacs-neither-restores-nor-saves ()
+  (pi-deck-test--with-deck
+    (let ((pi-deck-save-delay 0.01) started)
+      (pi-deck-test--write-state pi-deck-state-file "/s/pi" '("a") dir)
+      (let ((before (with-temp-buffer (insert-file-contents pi-deck-state-file) (buffer-string))))
+        ;; Another daemon, then an Emacs without a server.
+        (dolist (socket '("/s/other" nil))
+          (pi-deck-test--claiming socket started
+            (pi-deck-claim-state)
+            (should-not pi-deck--state-owner)
+            (pi-deck-create-space dir (format "own-%s" (if socket "other" "none")))
+            (pi-deck--save-now)
+            (pi-deck-test--wait (lambda () nil) 0.1)))
+        (should-not started)
+        (should (equal (with-temp-buffer (insert-file-contents pi-deck-state-file) (buffer-string))
+                       before))))))
+
+(ert-deftest pi-deck-test-explicit-save-takes-over-the-state ()
+  (pi-deck-test--with-deck
+    (let (started)
+      (dolist (owner '(nil "/s/pi"))
+        (pi-deck-test--write-state pi-deck-state-file owner '("a") dir)
+        (setq pi-deck--last-saved nil)
+        (pi-deck-test--claiming "/s/other" started
+          (pi-deck-claim-state)
+          (should-not pi-deck--state-owner)
+          (pi-deck-save-state)
+          (should (equal pi-deck--state-owner "/s/other"))
+          (should (equal (plist-get (pi-deck-read-state) :owner) "/s/other"))))
+      (should-not started))))
+
+(ert-deftest pi-deck-test-unrestored-state-is-backed-up ()
+  (pi-deck-test--with-deck
+    (let ((pi-deck-auto-restore nil) started)
+      (pi-deck-test--write-state pi-deck-state-file "/s/pi" '("a") dir)
+      (pi-deck-test--claiming "/s/pi" started
+        (pi-deck-claim-state)
+        (should (equal pi-deck--state-owner "/s/pi"))
+        (should-not started)
+        (pi-deck-create-space dir "new")
+        (pi-deck--save-now)
+        (let ((backup (concat pi-deck-state-file ".bak")))
+          (should (equal (mapcar (lambda (r) (plist-get r :name))
+                                 (plist-get (pi-deck-read-state backup) :agents))
+                         '("a")))
+          (should (pi-deck-space "new"))
+          (should-not (plist-get (pi-deck-read-state) :agents))
+          ;; Only the first save moves the old file away.
+          (delete-file backup)
+          (pi-deck-new-tab "t")
+          (pi-deck-save-state)
+          (should-not (file-exists-p backup)))))))
+
+(ert-deftest pi-deck-test-restore-is-staggered ()
+  (pi-deck-test--with-deck
+    (let ((pi-deck-restore-interval 0.05) started)
+      (pi-deck-test--write-state pi-deck-state-file "/s/pi" '("a" "b" "c") dir)
+      (pi-deck-test--claiming "/s/pi" started
+        (pi-deck-claim-state)
+        (should (equal started '("a")))
+        (should (timerp pi-deck--restoring))
+        ;; No save while sessions are still starting: the file lists them all.
+        (pi-deck--save-now)
+        (should (= 3 (length (plist-get (pi-deck-read-state) :agents))))
+        (should-error (pi-deck-restore-state) :type 'user-error)
+        (should (pi-deck-test--wait (lambda () (null pi-deck--restoring))))
+        (should (equal (reverse started) '("a" "b" "c")))
+        (pi-deck--save-now)
+        (should (= 3 (length (plist-get (pi-deck-read-state) :agents))))))))
+
+(ert-deftest pi-deck-test-daemon-claims-after-server-start ()
+  (pi-deck-test--with-deck
+    (pi-deck-mode -1)
+    (let ((pi-deck--state-claimed nil)
+          (emacs-startup-hook nil))
+      (cl-letf (((symbol-function 'daemonp) #'always)
+                ((symbol-function 'pi-deck-server-running-p) #'ignore))
+        (pi-deck-mode 1))
+      (should-not pi-deck--state-claimed)
+      (should (memq #'pi-deck-claim-state emacs-startup-hook))
+      (pi-deck-mode -1)
+      (should-not (memq #'pi-deck-claim-state emacs-startup-hook)))))
 
 (ert-deftest pi-deck-test-server-socket-absolute-name ()
   (cl-letf (((symbol-function 'pi-deck-server-running-p) #'always))

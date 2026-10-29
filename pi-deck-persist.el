@@ -11,6 +11,11 @@
 ;; recreates missing spaces' tabs.  Orchestration workers and panels belong
 ;; to their parent Pi and are never restored.
 ;;
+;; The file belongs to one Emacs server, recorded by its socket.  That
+;; server restores it whenever it starts, however it stopped, and is the
+;; only Emacs that saves it automatically.  Others (a plain `emacs', a
+;; disposable test daemon) neither restore nor overwrite it.
+;;
 ;; Tabs are frame-local, but a daemon may have no client frame.  The last
 ;; client frame's tabs are therefore kept when it closes and given to the
 ;; next new frame, and other new frames copy the layout of an existing one.
@@ -22,16 +27,24 @@
 (require 'pi-deck-overview)
 
 (declare-function pi-deck--client-frames "pi-deck-daemon" ())
+(declare-function pi-deck-server-socket "pi-deck-daemon" ())
 
 (defcustom pi-deck-state-file (locate-user-emacs-file "var/pi-deck/state.eld")
   "File holding saved spaces, tabs and sessions."
   :type 'file
   :group 'pi-deck)
 
-(defcustom pi-deck-auto-restore nil
-  "Whether enabling `pi-deck-mode' restores the saved state.
-A daemon restarted by `pi-deck-restart-daemon' restores regardless."
+(defcustom pi-deck-auto-restore t
+  "Whether the server owning the state file restores it when it starts.
+Restoring resumes the Pi sessions and terminals open when Emacs stopped,
+however it stopped.  When nil, the saved state stays untouched until the
+first save, which first moves it to a \".bak\" file."
   :type 'boolean
+  :group 'pi-deck)
+
+(defcustom pi-deck-restore-interval 0.15
+  "Seconds between starting restored sessions and terminals; 0 starts all at once."
+  :type 'number
   :group 'pi-deck)
 
 (defcustom pi-deck-save-delay 2
@@ -53,14 +66,18 @@ client frame closes.  New frames and saves without any client frame use it.")
 (defvar pi-deck--pending-tabs nil
   "Restored tabs waiting for a client frame.")
 
-(defun pi-deck--restore-marker ()
-  "Return the file marking a restore after daemon restart."
-  (concat pi-deck-state-file ".restore"))
+(defvar pi-deck--state-owner nil
+  "Server socket under which this Emacs owns `pi-deck-state-file', or nil.
+Only the owner saves the state automatically.")
 
-(defun pi-deck-mark-restore-pending ()
-  "Make the next `pi-deck-mode' activation restore the saved state."
-  (make-directory (file-name-directory pi-deck-state-file) t)
-  (write-region "" nil (pi-deck--restore-marker) nil 'silent))
+(defvar pi-deck--state-claimed nil
+  "Non-nil once this Emacs decided whether it owns the state file.")
+
+(defvar pi-deck--state-backup-pending nil
+  "Non-nil while an owned but unrestored state file awaits its backup.")
+
+(defvar pi-deck--restoring nil
+  "Non-nil while a staggered restore starts sessions; its timer when waiting.")
 
 ;;;; Serialization
 
@@ -111,6 +128,7 @@ frame's initial tab, and restoring or mirroring them only adds clutter."
   (let ((tab-index (pi-deck-tab-index (pi-deck--state-frame)))
         (frame (pi-deck--state-frame)))
     (list :version 1
+          :owner (or pi-deck--state-owner (pi-deck-server-socket))
           :spaces pi-deck-spaces
           ;; Without a client frame, keep the last known tabs: a terminal
           ;; that dies (closed SSH, killed multiplexer) deletes its frames
@@ -127,16 +145,24 @@ frame's initial tab, and restoring or mirroring them only adds clutter."
 ;;;###autoload
 (defun pi-deck-save-state (&optional file)
   "Save spaces, tabs and sessions to FILE (default `pi-deck-state-file').
-An unchanged state is not rewritten."
+An unchanged state is not rewritten.  Saving the default file makes this
+server its owner.  The first save over an owned state file that was not
+restored keeps the old file as FILE.bak."
   (interactive)
+  (when (member file (list nil pi-deck-state-file))
+    (setq pi-deck--state-owner (or pi-deck--state-owner (pi-deck-server-socket))))
   (let* ((file (or file pi-deck-state-file))
          (state (pi-deck-state))
          (text (let ((print-length nil) (print-level nil) (print-circle nil))
                  (concat ";; pi-deck state -*- lisp-data -*-\n" (prin1-to-string state) "\n"))))
     (unless (and (equal pi-deck--last-saved (cons file text)) (file-exists-p file))
       (make-directory (file-name-directory file) t)
+      (when (and pi-deck--state-backup-pending (equal file pi-deck-state-file))
+        (setq pi-deck--state-backup-pending nil)
+        (when (file-exists-p file) (rename-file file (concat file ".bak") t)))
       (with-file-modes #o600
         (write-region text nil file nil 'silent))
+      (set-file-modes file #o600)
       (setq pi-deck--last-saved (cons file text)))
     (when (called-interactively-p 'any)
       (message "Saved %d spaces and %d sessions to %s"
@@ -165,11 +191,14 @@ indefinitely by a stream of changes."
     (setq pi-deck--save-timer (run-with-timer pi-deck-save-delay nil #'pi-deck--save-now))))
 
 (defun pi-deck--save-now ()
-  "Save the state when there is anything to save."
+  "Save the state when this Emacs owns the file and there is anything to save.
+Nothing is saved during a restore: the file still lists what remains."
   (when pi-deck--save-timer
     (cancel-timer pi-deck--save-timer)
     (setq pi-deck--save-timer nil))
-  (when (or pi-deck-spaces (> (hash-table-count pi-deck--agents) 0))
+  (when (and pi-deck--state-owner
+             (not pi-deck--restoring)
+             (or pi-deck-spaces (> (hash-table-count pi-deck--agents) 0)))
     (with-demoted-errors "pi-deck save: %S" (pi-deck-save-state))))
 
 (defun pi-deck--save-on-agent-change (_agent _old new)
@@ -267,32 +296,75 @@ A lone unused initial tab is replaced."
 ;;;###autoload
 (defun pi-deck-restore-state (&optional file)
   "Restore spaces, sessions and tabs saved in FILE (default `pi-deck-state-file').
-Pi sessions resume from their session files.  Tabs go to the selected client
-frame, or to the next client frame when there is none."
+Pi sessions resume from their session files, `pi-deck-restore-interval'
+seconds apart.  Once all exist, the tabs go to the selected client frame,
+or to the next client frame when there is none."
   (interactive)
+  (when pi-deck--restoring
+    (user-error "A pi-deck restore is still running"))
   (let ((state (or (pi-deck-read-state file)
                    (user-error "No saved pi-deck state"))))
     (dolist (space (plist-get state :spaces))
       (unless (pi-deck-space (plist-get space :name))
         (pi-deck--register-space (plist-get space :name) (plist-get space :dir))))
-    (let ((agents (delq nil (mapcar #'pi-deck--restore-agent (plist-get state :agents)))))
-      (let ((frame (pi-deck--state-frame)))
-        (if frame
-            (pi-deck-apply-tabs (plist-get state :tabs) frame)
-          (setq pi-deck--pending-tabs (plist-get state :tabs))))
-      (pi-deck--sidebar-sync)
-      (pi-deck--schedule-update)
-      (message "pi-deck: restored %d spaces and %d sessions"
-               (length (plist-get state :spaces)) (length agents))
-      agents)))
+    (setq pi-deck--restoring t)
+    (pi-deck--restore-next (plist-get state :agents) (plist-get state :tabs)
+                           (length (plist-get state :spaces)) 0)))
 
-(defun pi-deck-restore-if-pending ()
-  "Restore the saved state after a daemon restart or with `pi-deck-auto-restore'."
-  (let ((marker (pi-deck--restore-marker)))
-    (when (or pi-deck-auto-restore (file-exists-p marker))
-      (when (file-exists-p marker) (delete-file marker))
-      (when (file-readable-p pi-deck-state-file)
-        (pi-deck-restore-state)))))
+(defun pi-deck--restore-next (records tabs spaces restored)
+  "Restore RECORDS one by one, then TABS; report SPACES and RESTORED sessions.
+After each started record, the rest wait `pi-deck-restore-interval'."
+  (setq pi-deck--restoring t)
+  (while (and records (eq pi-deck--restoring t))
+    (when (pi-deck--restore-agent (pop records))
+      (cl-incf restored)
+      (when (and records (> pi-deck-restore-interval 0))
+        (setq pi-deck--restoring
+              (run-with-timer pi-deck-restore-interval nil #'pi-deck--restore-next
+                              records tabs spaces restored)))))
+  (unless (timerp pi-deck--restoring)
+    (setq pi-deck--restoring nil)
+    ;; Window states name the restored buffers: apply tabs only now.
+    (let ((frame (pi-deck--state-frame)))
+      (if frame
+          (pi-deck-apply-tabs tabs frame)
+        (setq pi-deck--pending-tabs tabs)))
+    (pi-deck--sidebar-sync)
+    (pi-deck--schedule-update)
+    (pi-deck-schedule-save)
+    (message "pi-deck: restored %d spaces and %d sessions" spaces restored)))
+
+(defun pi-deck-cancel-restore ()
+  "Stop a running staggered restore; the state file keeps the rest."
+  (when (timerp pi-deck--restoring) (cancel-timer pi-deck--restoring))
+  (setq pi-deck--restoring nil))
+
+(defun pi-deck-claim-state ()
+  "Decide once whether this Emacs owns the state file, and restore it if so.
+Only a running server can own it: the one whose socket the file records,
+or any server when there is no file.  The owner restores the file when
+`pi-deck-auto-restore' is non-nil.  `pi-deck-save-state' takes over a file
+another server owns."
+  (unless pi-deck--state-claimed
+    (setq pi-deck--state-claimed t)
+    (when-let* ((socket (pi-deck-server-socket)))
+      (let* ((state (condition-case nil (pi-deck-read-state) (error 'unreadable)))
+             (owner (and (consp state) (plist-get state :owner))))
+        (cond
+         ((null state) (setq pi-deck--state-owner socket))
+         ((eq state 'unreadable)
+          (setq pi-deck--state-owner socket
+                pi-deck--state-backup-pending t)
+          (message "pi-deck: cannot read %s; it is kept as .bak at the first save"
+                   (abbreviate-file-name pi-deck-state-file)))
+         ((equal owner socket)
+          (setq pi-deck--state-owner socket)
+          (if pi-deck-auto-restore
+              (pi-deck-restore-state)
+            (setq pi-deck--state-backup-pending t)))
+         (t (message "pi-deck: %s belongs to %s; not restoring or saving it"
+                     (abbreviate-file-name pi-deck-state-file)
+                     (or owner "no server"))))))))
 
 ;;;; Frames
 
@@ -348,6 +420,8 @@ used by `/switch emacs'."
                                                               (pi-deck--tabs other))))
                                 (pi-deck--client-frames))))
         (cond
+         ;; A running restore applies its tabs once all sessions exist.
+         (pi-deck--restoring (pi-deck-root-ensure frame))
          (pi-deck--pending-tabs
           (pi-deck-apply-tabs (prog1 pi-deck--pending-tabs (setq pi-deck--pending-tabs nil))
                               frame))

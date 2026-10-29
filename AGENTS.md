@@ -98,6 +98,14 @@ references use `declare-function`.
 - State saves are event-driven (`pi-deck-schedule-save`): never add
   periodic saving. Preferences changed by commands (sidebar toggle) are
   saved with `pi-deck-save-preference`.
+- The state file has one owner, the server socket it records. Automatic
+  saves (`pi-deck--save-now`, also used by restart and `kill-emacs-hook`) need
+  `pi-deck--state-owner`, and none run during a staggered restore
+  (`pi-deck--restoring`). `pi-deck-claim-state` decides ownership and
+  restores once per Emacs, in a daemon only from `emacs-startup-hook` (the
+  server starts after the init file; sessions spawned earlier miss the
+  orchestration environment). Tests bind a fake owner in
+  `pi-deck-test--with-deck`; disposable daemons never own the user's file.
 - Key sheet entries name commands, never key strings: keys come from
   `where-is-internal` (in the overview buffer for global commands, so the
   Evil leader is found), Pilish keymaps or the transient menu. Never look
@@ -113,7 +121,7 @@ references use `declare-function`.
 
 ```sh
 make test     # compile with warnings as errors + ERT (emacs -Q --batch)
-make smoke    # real Pi/faux in a disposable daemon, including restart
+make smoke    # real Pi/faux in a disposable daemon: restart, then kill-emacs + fresh start
 ```
 
 ## Known issues

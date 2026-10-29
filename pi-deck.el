@@ -174,10 +174,17 @@ that switch tabs and then split) need them now."
         (pi-deck-refresh)
         (setq pi-deck--refresh-timer
               (run-with-timer pi-deck-refresh-interval pi-deck-refresh-interval #'pi-deck--tick))
-        (pi-deck-restore-if-pending)
+        ;; A daemon starts its server only after the init file; claim the
+        ;; state then, so the owner is known and restored sessions get
+        ;; the server's orchestration environment.
+        (if (and (daemonp) (not (pi-deck-server-running-p)))
+            (add-hook 'emacs-startup-hook #'pi-deck-claim-state)
+          (pi-deck-claim-state))
         (dolist (frame (pi-deck--client-frames))
           (pi-deck-root-ensure frame)
           (with-selected-frame frame (pi-deck--sidebar-sync))))
+    (remove-hook 'emacs-startup-hook #'pi-deck-claim-state)
+    (pi-deck-cancel-restore)
     (when pi-deck--save-timer (pi-deck--save-now))
     (setq pilish-extension-dialog-style pi-deck--previous-dialog-style)
     (unless pi-deck--previous-pairing (pilish-window-pairing-mode -1))

@@ -1,6 +1,7 @@
 #!/bin/sh
 # Real Pi sessions (faux provider only) in a disposable Emacs daemon,
-# including a restart through `pi-deck-restart-daemon'.  Never paid calls.
+# including a restart through `pi-deck-restart-daemon' and a plain
+# kill-emacs followed by a fresh start.  Never paid calls.
 set -eu
 
 DECK_DIR=$(cd "$(dirname "$0")/.." && pwd)
@@ -106,4 +107,18 @@ NEW_PID=$(emacsclient -s "$NAME" --eval '(emacs-pid)')
 echo "restarted daemon: pid $OLD_PID -> $NEW_PID"
 RESULT=$(emacsclient -s "$NAME" --eval "(pi-deck-smoke-phase2 \"$SESSION\")")
 echo "phase 2: $RESULT"
-case "$RESULT" in '"PASS2'*) echo "smoke: PASS" ;; *) exit 1 ;; esac
+case "$RESULT" in '"PASS2'*) ;; *) exit 1 ;; esac
+
+# Any stop restores: a plain kill-emacs, then an ordinary daemon start.
+OLD_PID=$NEW_PID
+emacsclient -s "$NAME" --eval '(run-with-timer 0.1 nil (function kill-emacs))' >/dev/null
+i=0
+while kill -0 "$OLD_PID" 2>/dev/null; do
+  i=$((i + 1)); [ "$i" -lt 150 ] || { echo "daemon did not exit" >&2; exit 1; }
+  sleep 0.2
+done
+"$EMACS" -Q --daemon="$NAME" -l "$TMP/init.el" 2>"$TMP/daemon.log" || { cat "$TMP/daemon.log" >&2; exit 1; }
+wait_for_server
+RESULT=$(emacsclient -s "$NAME" --eval "(pi-deck-smoke-phase3 \"$SESSION\")")
+echo "phase 3: $RESULT"
+case "$RESULT" in '"PASS3'*) echo "smoke: PASS" ;; *) exit 1 ;; esac

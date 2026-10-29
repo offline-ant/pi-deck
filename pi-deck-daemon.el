@@ -8,16 +8,17 @@
 ;; clients, frames, uptime) and the Pi orchestration host.  Restarting saves
 ;; the deck state, starts a detached helper that waits for this process to
 ;; exit and then runs `pi-deck-restart-command', and exits.  The new daemon
-;; restores the saved spaces and sessions (see pi-deck-persist).
+;; restores the saved spaces and sessions like any start of the server
+;; owning the state file (see pi-deck-persist).
 
 ;;; Code:
 
 (require 'server)
 (require 'pi-deck-core)
 
-(declare-function pi-deck-save-state "pi-deck-persist" (&optional file))
-(declare-function pi-deck-mark-restore-pending "pi-deck-persist" ())
+(declare-function pi-deck--save-now "pi-deck-persist" ())
 (defvar pi-deck-state-file)
+(defvar pi-deck--state-owner)
 (defvar pi-deck--dbus-available)
 (defvar pi-deck-notify-method)
 
@@ -83,7 +84,8 @@ An absolute `server-name' is the file itself."
                ('nil "off")
                ((or 'auto 'dbus) (if (eq pi-deck--dbus-available t) "dbus" "dbus/echo"))
                (_ "echo area")))
-     (format "state %s" (abbreviate-file-name pi-deck-state-file)))))
+     (format "state %s%s" (abbreviate-file-name pi-deck-state-file)
+             (if pi-deck--state-owner "" " (not owned: never restored or saved here)")))))
 
 (defun pi-deck-live-sessions ()
   "Return agents whose processes would die with this Emacs."
@@ -117,7 +119,9 @@ An absolute `server-name' is the file itself."
 (defun pi-deck-restart-daemon (&optional force)
   "Restart this Emacs daemon, restoring spaces and sessions afterwards.
 Lists the live Pi sessions and terminals that will be stopped and asks for
-confirmation unless FORCE.  Pi sessions resume from their session files."
+confirmation unless FORCE.  The replacement restores the saved state like
+any start (see `pi-deck-auto-restore'): Pi sessions resume from their
+session files."
   (interactive)
   (unless (pi-deck-server-running-p)
     (user-error "This Emacs runs no server to restart"))
@@ -134,8 +138,7 @@ confirmation unless FORCE.  Pi sessions resume from their session files."
                                         (length live) names)
                          "")
                        (string-join (pi-deck-restart-command-line) " "))))
-      (pi-deck-save-state)
-      (pi-deck-mark-restore-pending)
+      (pi-deck--save-now)
       (call-process "setsid" nil 0 nil "-f" "sh" "-c"
                     (pi-deck--restart-script (emacs-pid) (pi-deck-restart-command-line)))
       (let ((confirm-kill-processes nil)
