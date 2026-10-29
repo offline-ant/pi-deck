@@ -287,13 +287,42 @@ TAB-INDEX caches `pi-deck-tab-index'."
       (setq name (format "%s<%d>" base (cl-incf n))))
     name))
 
+(defun pi-deck--project-dir-table (projects base)
+  "Return a completion table of PROJECTS for reading a space directory.
+When the input names an existing directory that is not one of PROJECTS,
+the input itself is listed first, annotated \"typed\", so accepting the
+first candidate takes exactly what was typed.  Relative input is checked
+against BASE.  Candidates keep their order (project.el's most recent
+first).  The input is read from the minibuffer when the table is called
+there: completion styles such as `substring' and `orderless' call the
+table with an empty string and filter afterwards."
+  (lambda (string pred action)
+    (if (eq action 'metadata)
+        `(metadata (display-sort-function . identity)
+                   (cycle-sort-function . identity)
+                   (annotation-function
+                    . ,(lambda (candidate)
+                         (unless (member candidate projects) "  (typed)"))))
+      (let ((input (if (minibufferp) (minibuffer-contents-no-properties) string)))
+        (complete-with-action
+         action
+         (if (and (not (string-empty-p input))
+                  (not (member (file-name-as-directory input) projects))
+                  (file-directory-p (expand-file-name input base)))
+             (cons input projects)
+           projects)
+         string pred)))))
+
 (defun pi-deck--read-project-dir ()
-  "Read a project directory, offering known projects."
+  "Read a project directory, offering known projects.
+An existing directory typed at the prompt is offered first (see
+`pi-deck--project-dir-table'); empty input takes `default-directory'."
   (let ((projects (ignore-errors (project-known-project-roots))))
     (expand-file-name
      (if projects
-         (completing-read "Space directory: " projects nil nil nil nil
-                          (abbreviate-file-name default-directory))
+         (completing-read "Space directory: "
+                          (pi-deck--project-dir-table projects default-directory)
+                          nil nil nil nil (abbreviate-file-name default-directory))
        (read-directory-name "Space directory: ")))))
 
 (defvar pi-deck-overview-buffer-name)

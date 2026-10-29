@@ -344,6 +344,56 @@
           (delete-directory fresh t)))
       (delete-directory other t))))
 
+(ert-deftest pi-deck-test-space-directory-prompt-offers-typed-directory ()
+  (let* ((root (directory-file-name (make-temp-file "pi-deck-root-" t)))
+         (project (file-name-as-directory (expand-file-name "proj" root)))
+         (projects (list project))
+         (table (pi-deck--project-dir-table projects root)))
+    (unwind-protect
+        (progn
+          (make-directory project)
+          ;; An existing directory that is no project comes first, annotated.
+          (should (equal (all-completions root table) (list root project)))
+          (let ((metadata (completion-metadata "" table nil)))
+            (should (eq (completion-metadata-get metadata 'display-sort-function) #'identity))
+            (should (equal (funcall (completion-metadata-get metadata 'annotation-function) root)
+                           "  (typed)"))
+            (should-not (funcall (completion-metadata-get metadata 'annotation-function) project)))
+          ;; Empty, missing and already listed directories add nothing.
+          (should (equal (all-completions "" table) projects))
+          (should (equal (all-completions (expand-file-name "nope" root) table) nil))
+          (should (equal (all-completions (directory-file-name project) table) projects))
+          (should (equal (all-completions project table) projects))
+          ;; Relative and ~ input is checked against the base directory and home.
+          (should (equal (all-completions ".." (pi-deck--project-dir-table projects project))
+                         (list "..")))
+          (should (equal (all-completions "~" table) (list "~")))
+          ;; Styles that call the table with an empty string still see the input.
+          (cl-letf (((symbol-function 'minibufferp) (lambda (&rest _) t))
+                    ((symbol-function 'minibuffer-contents-no-properties) (lambda () root)))
+            (let* ((completion-styles '(substring))
+                   (all (completion-all-completions root table nil (length root))))
+              (setcdr (last all) nil)   ; drop the base size
+              (should (equal (mapcar #'substring-no-properties all) (list root project)))))
+          ;; The prompt returns the expanded choice; empty input takes the default.
+          (let ((default-directory (file-name-as-directory root)) answer read-dir)
+            (cl-letf (((symbol-function 'project-known-project-roots) (lambda () projects))
+                      ((symbol-function 'completing-read)
+                       (lambda (_prompt _table _pred _req _init _hist default)
+                         (if (string-empty-p answer) default answer))))
+              (dolist (case `(("proj" . ,(directory-file-name project))
+                              ("~" . ,(expand-file-name "~"))
+                              ("" . ,(file-name-as-directory root))))
+                (setq answer (car case))
+                (should (equal (pi-deck--read-project-dir) (cdr case)))))
+            ;; Without known projects it reads a plain directory name.
+            (cl-letf (((symbol-function 'project-known-project-roots) #'ignore)
+                      ((symbol-function 'read-directory-name)
+                       (lambda (&rest _) (setq read-dir t) "proj/")))
+              (should (equal (pi-deck--read-project-dir) project))
+              (should read-dir))))
+      (delete-directory root t))))
+
 (ert-deftest pi-deck-test-panes-keep-chat-and-input-together ()
   (pi-deck-test--with-deck
     (pi-deck-create-space dir "space")

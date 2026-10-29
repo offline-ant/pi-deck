@@ -110,7 +110,7 @@ overview even before pi-deck sets it up.
 | `e` | new shell pane (`C-u`: split right) |
 | `f` | fork the Pi agent in the selected pane (as `[⑂]`) |
 | `A` | answer the current agent's pending dialog |
-| `S` / `s` | create space (project directory) / switch space |
+| `S` / `s` | create space (project directory: known projects are offered; a typed existing directory is listed first, marked `(typed)`) / switch space |
 | `R` / `K` | rename / close space (stops its agents; see [Closing](#closing)) |
 | `t` / `r` / `X` | new tab (showing the space's directory) / rename / close tab (stops what only it shows) |
 | `]` / `[` | next / previous tab within the space |
