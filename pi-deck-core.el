@@ -129,7 +129,7 @@
   "Return AGENT's working directory."
   (let ((buffer (pi-deck-agent-buffer agent)))
     (if (eq (pi-deck-agent-kind agent) 'pi)
-        (pilish--chat-session-directory buffer)
+        (pilish-session-directory buffer)
       (buffer-local-value 'default-directory buffer))))
 
 (defun pi-deck-agent-process (agent)
@@ -142,14 +142,13 @@
 (defun pi-deck-agent-session-name (agent)
   "Return the Pilish named-session suffix of AGENT, or nil."
   (when (eq (pi-deck-agent-kind agent) 'pi)
-    (buffer-local-value 'pilish--canonical-session-name (pi-deck-agent-buffer agent))))
+    (pilish-session-name (pi-deck-agent-buffer agent))))
 
 (defun pi-deck-agent-name (agent)
   "Return a short display name for AGENT."
   (let ((buffer (pi-deck-agent-buffer agent)))
     (if (eq (pi-deck-agent-kind agent) 'pi)
-        (or (let ((name (buffer-local-value 'pilish--session-name buffer)))
-              (and (stringp name) (not (string-empty-p name)) name))
+        (or (pilish-session-title buffer)
             (pi-deck-agent-session-name agent)
             (file-name-nondirectory
              (directory-file-name (pi-deck-agent-directory agent))))
@@ -162,15 +161,12 @@
 (defun pi-deck-agent-model (agent)
   "Return AGENT's model ID, or nil."
   (when (eq (pi-deck-agent-kind agent) 'pi)
-    (let ((model (plist-get (buffer-local-value 'pilish--state (pi-deck-agent-buffer agent))
-                            :model)))
-      (and (listp model) (plist-get model :id)))))
+    (plist-get (pilish-session-model (pi-deck-agent-buffer agent)) :id)))
 
 (defun pi-deck-agent-session-file (agent)
   "Return AGENT's Pi session file, or nil."
   (when (eq (pi-deck-agent-kind agent) 'pi)
-    (plist-get (buffer-local-value 'pilish--state (pi-deck-agent-buffer agent))
-               :session-file)))
+    (pilish-session-file (pi-deck-agent-buffer agent))))
 
 (defun pi-deck-agent-dialogs (agent)
   "Return the extension dialogs AGENT awaits the user for."
@@ -241,11 +237,7 @@ it now."
     (cond
      ((not (and (processp process) (process-live-p process))) 'unknown)
      ((pilish-session-pending-dialogs buffer) 'blocked)
-     ((or (memq (buffer-local-value 'pilish--status buffer)
-                '(sending streaming compacting))
-          (not (member (buffer-local-value 'pilish--activity-phase buffer)
-                       '(nil "idle"))))
-      'working)
+     ((pilish-session-busy-p buffer) 'working)
      (t 'idle))))
 
 (defun pi-deck--shell-state (buffer)

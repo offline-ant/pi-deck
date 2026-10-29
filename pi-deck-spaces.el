@@ -568,9 +568,7 @@ switch to it."
 (defun pi-deck--unique-session-name (dir)
   "Return the next free numeric Pilish session name in DIR."
   (let ((n 1))
-    (while (or (pilish--find-session (file-name-as-directory dir) (number-to-string n))
-               (get-buffer (pilish--buffer-name :chat (file-name-as-directory dir)
-                                                (number-to-string n))))
+    (while (pilish-session-exists-p dir (number-to-string n))
       (cl-incf n))
     (number-to-string n)))
 

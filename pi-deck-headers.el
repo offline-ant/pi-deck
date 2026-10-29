@@ -58,9 +58,8 @@
 
 (defun pi-deck--context-percent (agent)
   "Return AGENT's context use as \"41%\", or nil when unknown."
-  (let* ((stats (buffer-local-value 'pilish--cached-stats (pi-deck-agent-buffer agent)))
-         (usage (plist-get stats :contextUsage))
-         (percent (plist-get usage :percent)))
+  (let ((percent (plist-get (pilish-session-context-usage (pi-deck-agent-buffer agent))
+                            :percent)))
     (and (numberp percent) (format "%d%%" (round percent)))))
 
 (defun pi-deck--header-details (agent)

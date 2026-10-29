@@ -18,7 +18,7 @@
 (require 'pi-deck-workers)
 
 (declare-function pi-deck-jump "pi-deck-goto" (agent))
-(declare-function pi-deck-answer-dialog "pi-deck-goto" (&optional agent minibuffer))
+(declare-function pi-deck-answer-dialog "pi-deck-goto" (&optional agent))
 (declare-function pi-deck-root-show "pi-deck-overview" ())
 (declare-function pi-deck-zoom "pi-deck-spaces" ())
 

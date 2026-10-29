@@ -204,8 +204,8 @@ indefinitely by a stream of changes."
                       (let ((file (plist-get record :session-file)))
                         (pi-deck--track
                          (pilish-start-session dir (plist-get record :name)
-                                               :args (and file (file-readable-p file)
-                                                          (list "--session" file)))
+                                               :session-file (and file (file-readable-p file)
+                                                                  file))
                          'pi)))
                      ('shell
                       (pi-deck--track

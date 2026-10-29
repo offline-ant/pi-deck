@@ -51,6 +51,12 @@ references use `declare-function`.
   (`pilish-split-input-window`, `pilish-dissolve-window-pair`,
   `pilish-repair-window-pairs`) and never pairs windows itself; split and zoom
   panes, never their halves. `pi-deck-mode` turns on `pilish-window-pairing-mode`.
+- Read Pilish sessions only through its public `pilish-session-*` accessors,
+  `pilish-session-exists-p` and `pilish-view-session-file`; ask Pilish for a new
+  accessor instead of reading `pilish--` state.
+- Pilish never guesses pairs from restored window shapes; pi-deck re-pairs
+  explicitly after `window-state-put` restores and tab switches
+  (`pilish-repair-window-pairs`).
 - Never split, display in or delete the selected window when it may be a side window
   (the sidebar). Commands act on `pi-deck--main-window` / `pi-deck--pane-window` (the
   most recently used chat pair, else other non-side window, when a side window is

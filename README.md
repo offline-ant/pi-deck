@@ -57,8 +57,8 @@ With `pi-deck-dialog-style` `inline` (the default), Pi dialogs never
 interrupt you: the agent turns blocked and its question waits at the end of
 its chat with clickable choices. Jumping to it (`RET` in the overview,
 `pi-deck-goto`, `pi-deck-next-attention`) or `A` puts point on the first
-choice: click, `RET` or a digit answers, `TAB` moves, `C-c C-k` cancels;
-`C-u A` answers in the minibuffer instead. The input header shows
+choice: click, `RET` or a digit answers, `TAB` moves, `C-c C-k` cancels.
+The input header shows
 `◉ answer: …` while a question waits; clicking it goes there. A question that
 follows your answer (the next `ask` question, its editor) takes focus, so
 multi-question flows are answered in a row; drafts are never touched.
@@ -296,8 +296,9 @@ resume from disk. Reattach clients afterwards.
 
 Each chat and the input window below it form one pane through Pilish's
 `pilish-window-pairing-mode`, which `pi-deck-mode` turns on: ordinary
-window commands (`C-x 0`, `C-x 1`, splits, `switch-to-buffer`, Evil's
-window moves, `winner-undo`) keep chat and input together, and several
+window commands (`C-x 0` on the chat, `C-x 1`, splits, `switch-to-buffer`,
+`winner-undo`) keep chat and input together (`C-x 0` on the input closes
+just the input), and several
 agents can sit side by side in one tab, each with its own input.  Pilish
 sizes the inputs (`pilish-input-window-height`; `fit` grows with the draft
 like Pi's editor).

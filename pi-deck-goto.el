@@ -91,15 +91,14 @@ TAB-INDEX caches `pi-deck-tab-index'."
                   nil t)))
     (cdr (assoc choice candidates))))
 
-(defun pi-deck-answer-dialog (&optional agent minibuffer)
+(defun pi-deck-answer-dialog (&optional agent)
   "Go to the oldest pending dialog of AGENT (default: the current session).
-An inline dialog gets point on its first choice; with MINIBUFFER
-\(interactively, a prefix argument) the minibuffer prompts instead."
-  (interactive (list nil current-prefix-arg))
+An inline dialog gets point on its first choice; an editor is displayed."
+  (interactive)
   (let ((chat (if agent (pi-deck-agent-buffer agent)
                 (or (pilish-session-chat-buffer (window-buffer))
                     (user-error "Not in a Pi session")))))
-    (pilish-answer-dialog chat minibuffer)))
+    (pilish-answer-dialog chat)))
 
 (defun pi-deck-jump (agent)
   "Show and focus AGENT; answer its dialog when blocked.

@@ -25,9 +25,7 @@
 
 (declare-function pi-deck--client-frames "pi-deck-daemon" ())
 (declare-function pi-deck--remove-views "pi-deck-close" (buffers))
-(declare-function pilish-open-subagent-snapshot "pilish-snapshot" (&optional target))
-(declare-function pilish--snapshot-target-for-pi-v3 "pilish-core"
-                  (anchor-file session-id root file))
+(declare-function pilish-view-session-file "pilish" (file))
 
 (defcustom pi-deck-show-panels t
   "Whether terminals (panels) started by an agent are shown at once.
@@ -181,26 +179,14 @@ buffer's own closed workers are dropped with it."
   (cl-remove-if-not (lambda (record) (eq (plist-get record :parent) parent))
                     pi-deck--finished-workers))
 
-(defun pi-deck--session-file-id (file)
-  "Return the session ID in the header line of Pi session FILE."
-  (with-temp-buffer
-    (insert-file-contents file nil 0 65536)
-    (goto-char (point-min))
-    (plist-get (json-parse-string (buffer-substring (point) (line-end-position))
-                                  :object-type 'plist)
-               :id)))
-
 (defun pi-deck-open-finished-worker (record)
   "Open closed worker RECORD's session in Pilish's read-only view."
-  (let* ((file (plist-get record :session-file))
-         (target (and (file-readable-p file)
-                      (pilish--snapshot-target-for-pi-v3
-                       file (pi-deck--session-file-id file)
-                       (file-name-directory file) (file-name-nondirectory file)))))
-    (unless target (user-error "Session of %s is unavailable" (plist-get record :name)))
+  (let ((file (plist-get record :session-file)))
+    (unless (file-readable-p file)
+      (user-error "Session of %s is unavailable" (plist-get record :name)))
     ;; Side windows cannot be split for the view.
     (pi-deck--select-ordinary-window)
-    (pilish-open-subagent-snapshot target)))
+    (pilish-view-session-file file)))
 
 (provide 'pi-deck-workers)
 ;;; pi-deck-workers.el ends here
