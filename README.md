@@ -312,6 +312,17 @@ like Pi's editor).
 `pi-deck-mirror-new-frames`, `pi-deck-restart-command`,
 `pi-deck-refresh-interval`.
 
+Other packages add tab bar buttons after the status cell through
+`pi-deck-tab-bar-extra-items`: functions returning `tab-bar-format` items
+`(KEY menu-item LABEL COMMAND . PROPS)`. Releasing mouse-1 or mouse-3 on one
+calls COMMAND with the click as its key sequence, so an
+`(interactive "e")` command can tell the buttons apart with
+`event-basic-type`. pi-sound's dictation button is one:
+
+```elisp
+(add-to-list 'pi-deck-tab-bar-extra-items #'pi-sound-tab-bar-format t)
+```
+
 ## Development
 
 ```sh

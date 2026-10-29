@@ -64,7 +64,13 @@ references use `declare-function`.
 - The tab bar renders only the current space's tabs as ordinary `tab-N` /
   `current-tab` items (non-current tabs keep a nil binding so tab-bar selects
   them); pi-deck's own items are keyed `pi-deck-*` and run on release through
-  pi-deck's `tab-bar-map` bindings. Popup menus open on release (`mouse-3`,
+  pi-deck's `tab-bar-map` bindings. Items from `pi-deck-tab-bar-extra-items`
+  (keys recorded at formatting in `pi-deck--extra-item-keys`) count as own
+  items, and their commands get the mouse-1 or mouse-3 click as key sequence.
+- In text terminals `pi-deck--tab-bar-item` hit-tests clicks itself
+  (`pi-deck--tab-bar-item-at`): `tab-bar--event-to-item` counts characters
+  and the right alignment as one column, missing wide labels and every
+  right-aligned item. Popup menus open on release (`mouse-3`,
   never `down-mouse-3`): a text terminal menu opened on press picks its first
   item at the release.
 - Closing goes through `pi-deck--tab-close-guard`

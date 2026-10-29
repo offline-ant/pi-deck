@@ -10,7 +10,8 @@
 ;;
 ;; ⌂ shows the overview (the hidden root tab), the space button opens a menu
 ;; of spaces, then come the current space's tabs with status icons and close
-;; buttons, `+' (a menu for new tabs) and the right-aligned status summary.
+;; buttons, `+' (a menu for new tabs), the right-aligned status summary and
+;; the items of `pi-deck-tab-bar-extra-items' (other packages' buttons).
 ;; Tabs are ordinary `tab-bar' items (`tab-N', `current-tab'), so tab-bar's
 ;; mouse handling keeps working: click selects, drag moves, mouse-2 and ✕
 ;; close (through `pi-deck-close-tab'), mouse-3 opens pi-deck's context
@@ -49,6 +50,16 @@
   :type 'boolean
   :group 'pi-deck)
 
+(defcustom pi-deck-tab-bar-extra-items nil
+  "Functions adding buttons after the tab bar's status cell.
+Each is called like a `tab-bar-format' function and returns a list of tab
+bar items (KEY menu-item LABEL COMMAND . PROPS).  They act like pi-deck's
+own buttons: releasing mouse-1 or mouse-3 on one calls COMMAND with the
+click as its key sequence, so a command reading (interactive \"e\") can
+tell the buttons apart with `event-basic-type'."
+  :type '(repeat function)
+  :group 'pi-deck)
+
 (defcustom pi-deck-tab-numbers nil
   "Whether tabs show their number within the space (as `SPC d 1…9' selects)."
   :type 'boolean
@@ -84,6 +95,16 @@
   (when-let* ((status (pi-deck-tab-bar-status-string)))
     `((pi-deck-status menu-item ,status pi-deck-tab-bar-status-click
                       :help "mouse-1: next agent needing attention, else the overview"))))
+
+(defvar pi-deck--extra-item-keys nil
+  "Keys of the items last produced by `pi-deck-tab-bar-extra-items'.")
+
+(defun pi-deck-tab-bar-format-extra ()
+  "Return the items of `pi-deck-tab-bar-extra-items'."
+  (let ((items (mapcan (lambda (function) (copy-sequence (funcall function)))
+                       pi-deck-tab-bar-extra-items)))
+    (setq pi-deck--extra-item-keys (mapcar #'car items))
+    items))
 
 (defun pi-deck-tab-bar-status-click ()
   "Jump to the next agent needing attention, or show the overview."
@@ -168,17 +189,56 @@ space."
   "Return pi-deck's `tab-bar-format'."
   (list #'pi-deck-tab-bar-format-space
         #'tab-bar-format-align-right
-        #'pi-deck-tab-bar-format-status))
+        #'pi-deck-tab-bar-format-status
+        #'pi-deck-tab-bar-format-extra))
 
 ;;;; Mouse
 
+(defun pi-deck--tab-bar-item-at (column)
+  "Return the text terminal tab bar item (KEY BINDING CLOSE-P) at COLUMN.
+`tab-bar--event-to-item' counts characters instead of columns there, and
+the right alignment as one, so it misses wide labels and everything
+right-aligned.  This places labels by display width and the items after
+`tab-bar-format-align-right' at the right edge, as tab-bar draws them."
+  (let* ((items (tab-bar-format-list tab-bar-format))
+         (rest (cdr (cl-member 'align-right items :key #'car)))
+         (start 0))
+    (catch 'found
+      (dolist (item items)
+        (let* ((label (nth 2 item))
+               (width (if (eq (car item) 'align-right)
+                          (- (frame-inner-width) start
+                             (apply #'+ (mapcar (lambda (rest-item) (string-width (nth 2 rest-item))) rest)))
+                        (string-width label))))
+          (when (< column (+ start width))
+            (let ((index 0) (offset (- column start)))
+              (unless (eq (car item) 'align-right)
+                (while (and (< index (length label))
+                            (>= offset (char-width (aref label index))))
+                  (setq offset (- offset (char-width (aref label index)))
+                        index (1+ index))))
+              (throw 'found (list (car item) (nth 3 item)
+                                  (and (< index (length label))
+                                       (get-text-property index 'close-tab label))))))
+          (setq start (+ start (max width 0))))))))
+
 (defun pi-deck--tab-bar-item (event)
   "Return the tab bar item (KEY BINDING CLOSE-P) clicked in EVENT."
-  (tab-bar--event-to-item (event-start event)))
+  (let ((posn (event-start event)))
+    (if (or (posn-window posn) (not (car (posn-x-y posn))))
+        (tab-bar--event-to-item posn)
+      (setq tab-bar--dragging-in-progress nil)
+      (pi-deck--tab-bar-item-at (car (posn-x-y posn))))))
+
+(defun pi-deck--extra-item-p (item)
+  "Return non-nil when ITEM comes from `pi-deck-tab-bar-extra-items'."
+  (and (car item) (memq (car item) pi-deck--extra-item-keys)))
 
 (defun pi-deck--own-item-p (item)
-  "Return non-nil when ITEM is one of pi-deck's own tab bar buttons."
-  (string-prefix-p "pi-deck-" (symbol-name (or (car item) 'nil))))
+  "Return non-nil when ITEM is a button pi-deck runs on release.
+These are pi-deck's own buttons and the extra items."
+  (or (string-prefix-p "pi-deck-" (symbol-name (or (car item) 'nil)))
+      (pi-deck--extra-item-p item)))
 
 (defun pi-deck-tab-bar-mouse-down-1 (event)
   "Select the tab pressed in EVENT; pi-deck's buttons wait for the release."
@@ -192,6 +252,8 @@ space."
   (let* ((item (pi-deck--tab-bar-item event))
          (number (tab-bar--key-to-number (car item))))
     (cond
+     ((pi-deck--extra-item-p item)
+      (when (commandp (nth 1 item)) (call-interactively (nth 1 item) nil (vector event))))
      ((pi-deck--own-item-p item)
       (when (commandp (nth 1 item)) (call-interactively (nth 1 item))))
      ((and (nth 2 item) (not (eq number t)))
@@ -211,6 +273,8 @@ space."
   (let* ((item (pi-deck--tab-bar-item event))
          (number (tab-bar--key-to-number (car item))))
     (cond
+     ((pi-deck--extra-item-p item)
+      (when (commandp (nth 1 item)) (call-interactively (nth 1 item) nil (vector event))))
      ((eq (car item) 'pi-deck-space)
       (if-let* ((space (pi-deck--tab-bar-space (pi-deck--tabs))))
           (pi-deck-popup (pi-deck-space-menu space) event)

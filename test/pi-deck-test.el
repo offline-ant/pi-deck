@@ -653,6 +653,40 @@
     (should-not (eq (keymap-lookup tab-bar-map "<mouse-1>") #'pi-deck-tab-bar-mouse-1))
     (pi-deck-mode 1)))
 
+(ert-deftest pi-deck-test-tab-bar-extra-items ()
+  (pi-deck-test--with-deck
+    (pi-deck-create-space dir "space")
+    (let* ((clicks nil)
+           (command (lambda (event) (interactive "e") (push (event-basic-type event) clicks)))
+           (pi-deck-tab-bar-extra-items
+            (list (lambda () `((test-mic menu-item " mic " ,command :help "test"))))))
+      (should (eq (car (last (pi-deck--tab-bar-format))) #'pi-deck-tab-bar-format-extra))
+      (should (equal (mapcar #'car (pi-deck-tab-bar-format-extra)) '(test-mic)))
+      (let ((item (list 'test-mic command nil)) (tabs (pi-deck--tabs)))
+        (cl-letf (((symbol-function 'pi-deck--tab-bar-item) (lambda (_event) item))
+                  ((symbol-function 'pi-deck-popup) (lambda (&rest _) (error "No menu expected"))))
+          ;; Pressing does nothing; releases run the command with the click.
+          (pi-deck-tab-bar-mouse-down-1 '(down-mouse-1 nil))
+          (should (equal (pi-deck--tabs) tabs))
+          (pi-deck-tab-bar-mouse-1 '(mouse-1 nil))
+          (pi-deck-tab-bar-mouse-3 '(mouse-3 nil))
+          (should (equal clicks '(mouse-3 mouse-1))))))))
+
+(ert-deftest pi-deck-test-tab-bar-text-terminal-hit-test ()
+  ;; Labels are placed by display width and right-aligned items at the edge.
+  (let* ((width (frame-inner-width))
+         (tab-bar-format
+          (list (lambda () `((wide menu-item ,(concat "🎤" (propertize "✕" 'close-tab t)) left)))
+                #'tab-bar-format-align-right
+                (lambda () '((right menu-item "ab" right-command))))))
+    (should (equal (pi-deck--tab-bar-item-at 0) '(wide left nil)))
+    (should (equal (pi-deck--tab-bar-item-at 1) '(wide left nil)))
+    (should (equal (pi-deck--tab-bar-item-at 2) '(wide left t)))
+    (should (eq (car (pi-deck--tab-bar-item-at 5)) 'align-right))
+    (should (equal (pi-deck--tab-bar-item-at (- width 2)) '(right right-command nil)))
+    (should (equal (pi-deck--tab-bar-item-at (- width 1)) '(right right-command nil)))
+    (should-not (pi-deck--tab-bar-item-at width))))
+
 (ert-deftest pi-deck-test-goto-candidates-group-by-space ()
   (pi-deck-test--with-deck
     (pi-deck-create-space dir "space")
