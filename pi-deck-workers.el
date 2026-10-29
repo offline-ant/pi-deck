@@ -4,12 +4,14 @@
 
 ;;; Commentary:
 
-;; Pi's Emacs orchestration host starts workers (Pilish sessions) and
-;; panels (terminals) as buffers no window shows.  pi-deck links them to
-;; their parent agent, shows panels in the parent's space as soon as they
-;; start (below the parent's pane when that is on screen, else in a new
-;; background tab of the space), and removes the windows and tabs it made
-;; for them once they close.
+;; Pi's Emacs orchestration host starts workers (Pilish sessions), forks
+;; (Pilish sessions placed as "interactive-fork") and panels (terminals) as
+;; buffers no window shows.  pi-deck links them to their parent agent and
+;; places them in the parent's space as they start: panels below the
+;; parent's pane when that is on screen, else in a new background tab;
+;; forks in a new background tab.  Workers get no tab: they are listed
+;; under their parent and shown beside it on demand.  Once a worker, fork or
+;; panel closes, the windows and tabs showing only it go too.
 ;;
 ;; Workers are ephemeral: the host kills their buffers when they finish.
 ;; Their session files remain, so each closed worker is remembered under its
@@ -22,6 +24,7 @@
 (require 'pi-deck-spaces)
 
 (declare-function pi-deck--client-frames "pi-deck-daemon" ())
+(declare-function pi-deck--remove-views "pi-deck-close" (buffers))
 (declare-function pilish-open-subagent-snapshot "pilish-snapshot" (&optional target))
 (declare-function pilish--snapshot-target-for-pi-v3 "pilish-core"
                   (anchor-file session-id root file))
@@ -44,9 +47,6 @@ otherwise in a new tab of the parent's space, without taking focus."
   :group 'pi-deck)
 
 (defvar pi-deck-sidebar-buffer-name)
-
-(defvar pi-deck--shown-panels nil
-  "Panel buffers pi-deck opened windows or tabs for.")
 
 (defvar pi-deck--finished-workers nil
   "Closed orchestration Pi workers, newest first.
@@ -88,17 +88,13 @@ nil when PARENT is not on screen or there is no room."
               (window (or (pi-deck--split-below (pi-deck--pane-of parent-window))
                           (pi-deck--split-below (window-main-window)))))
     (set-window-buffer window buffer)
-    (set-window-parameter window 'pi-deck-panel (buffer-name buffer))
-    (push buffer pi-deck--shown-panels)
     window))
 
-(defun pi-deck--panel-background-tab (buffer space)
-  "Open a tab of SPACE showing BUFFER, then return to the selected tab."
+(defun pi-deck--background-tab (agent space)
+  "Open a tab of SPACE showing AGENT, then return to the selected tab."
   (let ((original (tab-bar--current-tab-index)))
-    (pi-deck--new-tab-in-space (or space "other") (buffer-name buffer))
-    (set-window-buffer (selected-window) buffer)
-    (setf (alist-get 'pi-deck-panel (cdr (tab-bar--current-tab-find))) (buffer-name buffer))
-    (push buffer pi-deck--shown-panels)
+    (pi-deck--new-tab-in-space (or space "other"))
+    (pi-deck--display-agent-in-window agent (selected-window))
     (let ((new (tab-bar--current-tab-index)))
       (tab-bar-select-tab (1+ (if (<= new original) (1+ original) original))))))
 
@@ -112,44 +108,41 @@ already shown there or no client frame exists."
         (save-selected-window
           (let ((parent (pi-deck-agent parent-buffer)))
             (unless (pi-deck--panel-window-below buffer parent)
-              (pi-deck--panel-background-tab buffer (pi-deck--panel-space buffer parent)))))
+              (pi-deck--background-tab (pi-deck--track buffer 'shell)
+                                       (pi-deck--panel-space buffer parent)))))
+        (pi-deck--schedule-update)))))
+
+(defun pi-deck-show-fork (chat &optional parent-buffer frame)
+  "Show the forked Pi session CHAT in a new tab of PARENT-BUFFER's space.
+The tab opens in FRAME (default the selected client frame) without being
+selected."
+  (let ((frame (or frame (pi-deck--display-frame)))
+        (agent (pi-deck--track chat 'pi)))
+    (when (and frame (buffer-live-p chat) (not (get-buffer-window chat frame)))
+      (with-selected-frame frame
+        (save-selected-window
+          (let ((parent (pi-deck-agent parent-buffer)))
+            (setf (pi-deck-agent-assigned-space agent) (and parent (pi-deck-agent-space parent)))
+            (pi-deck--background-tab agent (pi-deck-agent-assigned-space agent))))
         (pi-deck--schedule-update)))))
 
 (defun pi-deck--on-target (id event)
-  "Refresh agents after orchestration target ID's EVENT; show new panels."
+  "Refresh agents after orchestration target ID's EVENT; place new targets.
+Panels open beside their parent and forks in a tab of its space; workers
+are only listed."
   (pi-deck-refresh)
-  (when (and (eq event 'start) pi-deck-show-panels)
+  (when (eq event 'start)
     (when-let* ((target (pi-deck--target id))
-                ((equal (plist-get target :kind) "shell"))
                 (buffer (plist-get target :buffer)))
       ;; Leave emacsclient's evaluation before rearranging windows.
-      (run-at-time 0 nil #'pi-deck-show-panel buffer (plist-get target :parent)))))
+      (cond
+       ((and (equal (plist-get target :kind) "shell") pi-deck-show-panels)
+        (run-at-time 0 nil #'pi-deck-show-panel buffer (plist-get target :parent)))
+       ((and (equal (plist-get target :kind) "pi")
+             (equal (plist-get target :placement) "interactive-fork"))
+        (run-at-time 0 nil #'pi-deck-show-fork buffer (plist-get target :parent)))))))
 
 ;;;; Closing
-
-(defun pi-deck--remove-panel-views (buffer)
-  "Delete the windows and tabs pi-deck opened for panel BUFFER.
-Panel tabs close only while they show nothing but BUFFER (and the sidebar)."
-  (let ((name (buffer-name buffer)))
-    (dolist (frame (pi-deck--client-frames))
-      (dolist (window (window-list frame 'no-minibuf))
-        (when (and (equal (window-parameter window 'pi-deck-panel) name)
-                   (eq (window-buffer window) buffer)
-                   (not (frame-root-window-p window)))
-          (delete-window window)))
-      (with-selected-frame frame
-        (let ((index 0) close)
-          (dolist (tab (pi-deck--tabs))
-            (cl-incf index)
-            (when (and (equal (alist-get 'pi-deck-panel tab) name)
-                       (cl-every (lambda (shown)
-                                   (or (eq shown buffer)
-                                       (equal (buffer-name shown) pi-deck-sidebar-buffer-name)))
-                                 (pi-deck--tab-buffers tab frame)))
-              (push index close)))
-          ;; Highest index first, so earlier indices stay valid.
-          (dolist (index close)
-            (tab-bar-close-tab index)))))))
 
 (defun pi-deck--remember-worker (agent)
   "Remember closed worker AGENT under its parent when it has a session file."
@@ -164,12 +157,14 @@ Panel tabs close only while they show nothing but BUFFER (and the sidebar)."
 
 (defun pi-deck--on-kill-buffer ()
   "Forget the current buffer's agent; remember it when it was a worker.
-Records of the buffer's own closed workers are dropped with it."
+Views of closing orchestration targets are removed.  Records of the
+buffer's own closed workers are dropped with it."
   (let ((buffer (current-buffer)))
-    (when (memq buffer pi-deck--shown-panels)
-      (setq pi-deck--shown-panels (delq buffer pi-deck--shown-panels))
-      (with-demoted-errors "pi-deck: %S" (pi-deck--remove-panel-views buffer)))
     (when-let* ((agent (gethash buffer pi-deck--agents)))
+      ;; Pi closes its workers, forks and panels itself: their views go.
+      (when (pi-deck-agent-target agent)
+        (with-demoted-errors "pi-deck: %S"
+          (pi-deck--remove-views (pi-deck-agent-windows-buffers agent))))
       (when (and (pi-deck-agent-target agent) (eq (pi-deck-agent-kind agent) 'pi))
         (with-demoted-errors "pi-deck: %S" (pi-deck--remember-worker agent)))
       (remhash buffer pi-deck--agents)

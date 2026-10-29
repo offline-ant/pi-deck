@@ -4,7 +4,7 @@
 
 ;;; Commentary:
 
-;; The root overview ends with a compact sheet of the keys that matter for
+;; The overview ends with a compact sheet of the keys that matter for
 ;; agent control.  Keys come from the live keymaps, so the sheet follows
 ;; rebinding: global commands are looked up in the overview's active maps
 ;; (the Evil `SPC d' leader when present, else `C-c d'), Pilish commands
@@ -40,7 +40,8 @@
      ("switch space" pi-deck-switch-space :click t)
      ("new tab" pi-deck-new-tab :click t)
      ("tab N" pi-deck-select-tab :range t)
-     ("root ⇄ back" pi-deck-root :click t))
+     ("close tab" pi-deck-close-tab)
+     ("overview ⇄ back" pi-deck-root :click t))
     ("Panes"
      ("split right" pi-deck-split-right)
      ("split below" pi-deck-split-below)

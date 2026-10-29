@@ -130,14 +130,15 @@ Panel names end in SUFFIX: Pi's panel names are global to the machine."
             (error "The panel is not linked to its agent"))
           (with-current-buffer (pi-deck-overview-buffer t)
             (pi-deck-overview-refresh)
-            (unless (string-match-p (concat "main\n +[^\n]*pi-panel:" below) (buffer-string))
+            (unless (string-match-p (concat "main *✕\n +[^\n]*" below " *✕") (buffer-string))
               (error "The sidebar lacks the panel under its agent:\n%s" (buffer-string)))))
         (pi-deck-smoke--wait "turn end" (lambda () (eq (pi-deck-agent-state agent) 'idle)))
         (pi-deck-smoke--submit chat (concat "close panel " below))
         (pi-deck-smoke--wait "panel window removed"
                              (lambda () (and (null (pi-deck-smoke--panel-buffer below))
                                              (not (cl-find-if
-                                                   (lambda (window) (window-parameter window 'pi-deck-panel))
+                                                   (lambda (window)
+                                                     (string-prefix-p "pi-panel:" (buffer-name (window-buffer window))))
                                                    (window-list frame 'no-minibuf)))))))
       (pi-deck-smoke--wait "turn end" (lambda () (eq (pi-deck-agent-state agent) 'idle)))
       ;; The parent is hidden: the panel gets a background tab in its space.

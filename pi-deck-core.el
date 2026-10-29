@@ -86,7 +86,8 @@
   (changed (float-time)) ; time of the last base-state change
   assigned-space    ; space explicitly assigned by pi-deck, or nil
   parent            ; parent agent buffer (orchestration), or nil
-  target)           ; orchestration target ID, or nil
+  target            ; orchestration target ID, or nil
+  placement)        ; orchestration placement: "worker", "interactive-fork" or nil
 
 (defvar pi-deck--agents (make-hash-table :test 'eq)
   "Tracked agents, keyed by their buffer.")
@@ -152,7 +153,11 @@
             (pi-deck-agent-session-name agent)
             (file-name-nondirectory
              (directory-file-name (pi-deck-agent-directory agent))))
-      (string-trim (buffer-name buffer) "\\*" "\\*"))))
+      (let ((name (buffer-name buffer)))
+        ;; Orchestration panels are "pi-panel:NAME:ID".
+        (if (string-match "\\`pi-panel:\\(.*\\):[^:]*\\'" name)
+            (match-string 1 name)
+          (string-trim name "\\*" "\\*"))))))
 
 (defun pi-deck-agent-model (agent)
   "Return AGENT's model ID, or nil."
@@ -195,6 +200,24 @@
     (delq nil (list buffer
                     (and (eq (pi-deck-agent-kind agent) 'pi)
                          (pilish-session-input-buffer buffer))))))
+
+(defun pi-deck-agent-worker-p (agent)
+  "Return non-nil when AGENT is an orchestration worker or panel of another agent.
+Interactive forks are peers, not workers."
+  (and (pi-deck-agent-target agent)
+       (not (equal (pi-deck-agent-placement agent) "interactive-fork"))))
+
+(defun pi-deck-agent-descendants (agent)
+  "Return the live agents descending from AGENT through parent links."
+  (let ((result nil) (queue (list agent)))
+    (while queue
+      (let ((buffer (pi-deck-agent-buffer (pop queue))))
+        (dolist (child (pi-deck-agents))
+          (when (and (eq (pi-deck-agent-parent child) buffer)
+                     (not (memq child result)) (not (eq child agent)))
+            (push child result)
+            (push child queue)))))
+    (nreverse result)))
 
 (defun pi-deck-agent-visible-p (agent)
   "Return non-nil when AGENT is shown in a window of a visible frame.
@@ -320,11 +343,11 @@ Leaving work (working or blocked to idle) while invisible makes it done."
     (pi-deck--apply (pi-deck--track buffer 'shell) (pi-deck--shell-state buffer)))))
 
 (defun pi-deck--orchestration-links ()
-  "Return an alist of (BUFFER . (ID . PARENT-BUFFER)) for orchestration targets."
+  "Return (BUFFER ID PARENT-BUFFER PLACEMENT) lists for orchestration targets."
   (when (fboundp 'pi-orchestration-targets)
     (mapcar (lambda (target)
-              (cons (plist-get target :buffer)
-                    (cons (plist-get target :id) (plist-get target :parent))))
+              (list (plist-get target :buffer) (plist-get target :id)
+                    (plist-get target :parent) (plist-get target :placement)))
             (pi-orchestration-targets))))
 
 (defun pi-deck-refresh ()
@@ -339,11 +362,12 @@ Leaving work (working or blocked to idle) while invisible makes it done."
                             (not pi-deck-include-shells)))
                    (progn (remhash buffer pi-deck--agents)
                           (pi-deck--schedule-update))
-                 (let ((link (cdr (assq buffer links))))
-                   (unless (and (equal (car link) (pi-deck-agent-target agent))
-                                (eq (cdr link) (pi-deck-agent-parent agent)))
-                     (setf (pi-deck-agent-target agent) (car link)
-                           (pi-deck-agent-parent agent) (cdr link))
+                 (pcase-let ((`(,id ,parent ,placement) (cdr (assq buffer links))))
+                   (unless (and (equal id (pi-deck-agent-target agent))
+                                (eq parent (pi-deck-agent-parent agent)))
+                     (setf (pi-deck-agent-target agent) id
+                           (pi-deck-agent-parent agent) parent
+                           (pi-deck-agent-placement agent) placement)
                      (pi-deck--schedule-update)))))
              pi-deck--agents)))
 

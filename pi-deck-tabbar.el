@@ -4,28 +4,39 @@
 
 ;;; Commentary:
 
-;; Adds a right-aligned status summary ("◉ 2 blocked · ● 1 done") and
-;; rolled-up status icons before tab and space (group) names.  Tab bar
-;; preferences toggled from the root menu persist in their own file, so the
-;; user's init files are never rewritten.
+;; The tab bar shows one space at a time:
+;;
+;;   ⌂ │ pi ▾ │ ◐ main ✕ │ tests ✕ │ +            ◉ 1 blocked · ● 1 done
+;;
+;; ⌂ shows the overview (the hidden root tab), the space button opens a menu
+;; of spaces, then come the current space's tabs with status icons and close
+;; buttons, `+' (a menu for new tabs) and the right-aligned status summary.
+;; Tabs are ordinary `tab-bar' items (`tab-N', `current-tab'), so tab-bar's
+;; mouse handling keeps working: click selects, drag moves, mouse-2 and ✕
+;; close (through `pi-deck-close-tab'), mouse-3 opens pi-deck's context
+;; menu.  pi-deck's own buttons and menus act on release.
+;;
+;; Tab bar preferences toggled from the menu persist in their own file, so
+;; the user's init files are never rewritten.
 
 ;;; Code:
 
 (require 'tab-bar)
 (require 'pi-deck-core)
 (require 'pi-deck-spaces)
+(require 'pi-deck-close)
 (require 'pi-deck-overview)
 
 (declare-function pi-deck-next-attention "pi-deck-goto" ())
+(declare-function pi-deck-space-menu "pi-deck-menus" (space))
+(declare-function pi-deck--new-tab-menu-map "pi-deck-menus" ())
+(declare-function pi-deck-tab-context-menu "pi-deck-menus" (number))
+(declare-function pi-deck-popup "pi-deck-menus" (menu &optional event))
+(declare-function pi-deck-spaces-menu "pi-deck-menus" (&optional event))
 
 (defcustom pi-deck-summary-statuses '(blocked done working)
   "Statuses counted in the tab bar status cell."
   :type '(set (const blocked) (const done) (const working) (const idle) (const unknown))
-  :group 'pi-deck)
-
-(defcustom pi-deck-tab-bar-groups t
-  "Whether the tab bar shows tabs grouped by space."
-  :type 'boolean
   :group 'pi-deck)
 
 (defcustom pi-deck-tab-bar-status-cell t
@@ -34,7 +45,12 @@
   :group 'pi-deck)
 
 (defcustom pi-deck-tab-bar-icons t
-  "Whether tab and space names get rolled-up status icons."
+  "Whether tabs and the space button get rolled-up status icons."
+  :type 'boolean
+  :group 'pi-deck)
+
+(defcustom pi-deck-tab-numbers nil
+  "Whether tabs show their number within the space (as `SPC d 1…9' selects)."
   :type 'boolean
   :group 'pi-deck)
 
@@ -45,8 +61,7 @@
   :group 'pi-deck)
 
 (defconst pi-deck-preference-variables
-  '(pi-deck-tab-bar-groups pi-deck-tab-bar-status-cell pi-deck-tab-bar-icons
-    tab-bar-show-inactive-group-tabs tab-bar-tab-hints tab-bar-show
+  '(pi-deck-tab-bar-status-cell pi-deck-tab-bar-icons pi-deck-tab-numbers tab-bar-show
     pi-deck-sidebar pi-deck-sidebar-side pi-deck-sidebar-width pi-deck-reveal-action
     pi-deck-key-sheet)
   "Variables saved by `pi-deck-save-preferences'.")
@@ -62,6 +77,8 @@
       (when summary
         (concat (pi-deck-summary-string summary) " ")))))
 
+;;;; Items
+
 (defun pi-deck-tab-bar-format-status ()
   "Return the tab bar status cell; clicking it jumps to the next attention."
   (when-let* ((status (pi-deck-tab-bar-status-string)))
@@ -76,52 +93,174 @@
       (pi-deck-next-attention)
     (pi-deck-root-show)))
 
-(defun pi-deck-tab-name-icon (name tab _i)
-  "Prefix tab NAME with TAB's rolled-up status icon."
-  (let ((status (and pi-deck-tab-bar-icons (pi-deck-tab-status tab))))
-    (if (memq status '(blocked done working))
-        (concat (pi-deck-status-icon status) " " name)
-      name)))
+(defun pi-deck--tab-bar-button (label face)
+  "Return LABEL as a tab bar button string with FACE."
+  (propertize label 'face face 'mouse-face 'tab-bar-tab-highlight 'pointer 'hand))
 
-(defun pi-deck-tab-group-format (tab i &optional current-p)
-  "Format TAB's group name at I, CURRENT-P as in the default, with an icon."
-  (let* ((formatted (tab-bar-tab-group-format-default tab i current-p))
-         (status (and pi-deck-tab-bar-icons
-                      (cdr (assoc (pi-deck--tab-group tab) (pi-deck-space-statuses))))))
-    (if (memq status '(blocked done working))
-        (concat (pi-deck-status-icon status) " " formatted)
-      formatted)))
+(defun pi-deck--icon-prefix (status)
+  "Return STATUS's icon and a space when icons are on and STATUS matters."
+  (if (and pi-deck-tab-bar-icons (memq status '(blocked done working)))
+      (concat (pi-deck-status-icon status) " ")
+    ""))
+
+(defconst pi-deck--tab-close-button
+  (propertize " ✕" 'close-tab t :help "Close tab; stops what only it shows")
+  "Close button after tab names; `close-tab' makes tab-bar treat it as one.")
+
+(defun pi-deck--format-tab-name (tab number)
+  "Return TAB's tab bar label as NUMBER-th tab of its space."
+  (let ((name (concat " " (pi-deck--icon-prefix (pi-deck-tab-status tab))
+                      (if pi-deck-tab-numbers (format "%d " number) "")
+                      (alist-get 'name tab)
+                      pi-deck--tab-close-button " ")))
+    (tab-bar-tab-name-format-mouse-face
+     (tab-bar-tab-name-format-face name tab number) tab number)))
+
+(defun pi-deck--tab-bar-space (tabs)
+  "Return the space the tab bar shows for TABS.
+That is the current tab's space; from the overview, the most recently used
+space."
+  (let ((current (tab-bar--current-tab-find tabs)))
+    (if (not (pi-deck-root-tab-p current))
+        (pi-deck--tab-group current)
+      (let ((recent (car (sort (cl-remove-if #'pi-deck-root-tab-p (copy-sequence tabs))
+                               :key (lambda (tab) (or (alist-get 'time tab) 0))
+                               :reverse t))))
+        (and recent (pi-deck--tab-group recent))))))
+
+(defun pi-deck-tab-bar-format-space ()
+  "Produce the overview button, the space button and the space's tabs."
+  (let* ((tabs (funcall tab-bar-tabs-function))
+         (root (pi-deck-root-tab-p (tab-bar--current-tab-find tabs)))
+         (space (pi-deck--tab-bar-space tabs))
+         (status (and space (cdr (assoc space (pi-deck-space-statuses)))))
+         (index 0) (number 0) items)
+    (push `(pi-deck-home menu-item
+                         ,(pi-deck--tab-bar-button " ⌂ " (if root 'tab-bar-tab 'tab-bar-tab-inactive))
+                         pi-deck-root :help "mouse-1: overview of all agents (again: back)")
+          items)
+    (push `(pi-deck-sep-home menu-item ,(tab-bar-separator) ignore) items)
+    (push `(pi-deck-space menu-item
+                          ,(pi-deck--tab-bar-button
+                            (concat " " (pi-deck--icon-prefix status) (or space "no space") " ▾ ")
+                            'tab-bar-tab-group-current)
+                          pi-deck-spaces-menu
+                          :help "mouse-1: switch space; mouse-3: this space's menu")
+          items)
+    (dolist (tab tabs)
+      (cl-incf index)
+      (when (and (not (pi-deck-root-tab-p tab)) (equal (pi-deck--tab-group tab) space))
+        (cl-incf number)
+        (let ((current (eq (car tab) 'current-tab)))
+          (push `(,(intern (format "sep-%d" index)) menu-item ,(tab-bar-separator) ignore) items)
+          (push `(,(if current 'current-tab (intern (format "tab-%d" index)))
+                  menu-item ,(pi-deck--format-tab-name tab number)
+                  ,(if current 'ignore (alist-get 'binding tab))
+                  :help ,(format "mouse-1: select; mouse-2 or ✕: close; mouse-3: menu"))
+                items))))
+    (push `(pi-deck-sep-add menu-item ,(tab-bar-separator) ignore) items)
+    (push `(pi-deck-add menu-item ,(pi-deck--tab-bar-button " + " 'tab-bar-tab-inactive)
+                        pi-deck-new-tab-menu :help "mouse-1: new agent, shell or empty tab")
+          items)
+    (nreverse items)))
 
 (defun pi-deck--tab-bar-format ()
-  "Return the `tab-bar-format' for the current preferences."
-  (append (list (if pi-deck-tab-bar-groups #'tab-bar-format-tabs-groups #'tab-bar-format-tabs)
-                #'tab-bar-separator
-                #'tab-bar-format-align-right
-                #'pi-deck-tab-bar-format-status)))
+  "Return pi-deck's `tab-bar-format'."
+  (list #'pi-deck-tab-bar-format-space
+        #'tab-bar-format-align-right
+        #'pi-deck-tab-bar-format-status))
+
+;;;; Mouse
+
+(defun pi-deck--tab-bar-item (event)
+  "Return the tab bar item (KEY BINDING CLOSE-P) clicked in EVENT."
+  (tab-bar--event-to-item (event-start event)))
+
+(defun pi-deck--own-item-p (item)
+  "Return non-nil when ITEM is one of pi-deck's own tab bar buttons."
+  (string-prefix-p "pi-deck-" (symbol-name (or (car item) 'nil))))
+
+(defun pi-deck-tab-bar-mouse-down-1 (event)
+  "Select the tab pressed in EVENT; pi-deck's buttons wait for the release."
+  (interactive "e")
+  (unless (pi-deck--own-item-p (pi-deck--tab-bar-item event))
+    (tab-bar-mouse-down-1 event)))
+
+(defun pi-deck-tab-bar-mouse-1 (event)
+  "Run pi-deck's button released in EVENT, or close a tab through its ✕."
+  (interactive "e")
+  (let* ((item (pi-deck--tab-bar-item event))
+         (number (tab-bar--key-to-number (car item))))
+    (cond
+     ((pi-deck--own-item-p item)
+      (when (commandp (nth 1 item)) (call-interactively (nth 1 item))))
+     ((and (nth 2 item) (not (eq number t)))
+      (pi-deck-close-tab (if (integerp number) number nil)))
+     (t (tab-bar-mouse-1 event)))))
+
+(defun pi-deck-tab-bar-mouse-2 (event)
+  "Close the tab clicked in EVENT Herdr-style."
+  (interactive "e")
+  (let ((number (tab-bar--key-to-number (car (pi-deck--tab-bar-item event)))))
+    (unless (eq number t)
+      (pi-deck-close-tab (if (integerp number) number nil)))))
+
+(defun pi-deck-tab-bar-mouse-3 (event)
+  "Open the context menu of the tab bar item clicked in EVENT."
+  (interactive "e")
+  (let* ((item (pi-deck--tab-bar-item event))
+         (number (tab-bar--key-to-number (car item))))
+    (cond
+     ((eq (car item) 'pi-deck-space)
+      (if-let* ((space (pi-deck--tab-bar-space (pi-deck--tabs))))
+          (pi-deck-popup (pi-deck-space-menu space) event)
+        (call-interactively #'pi-deck-spaces-menu)))
+     ((not (eq number t))
+      (pi-deck-popup (pi-deck-tab-context-menu
+                      (if (integerp number) number (1+ (tab-bar--current-tab-index))))
+                     event))
+     (t (pi-deck-popup (pi-deck--new-tab-menu-map) event)))))
+
+(defconst pi-deck--tab-bar-bindings
+  '(("<down-mouse-1>" . pi-deck-tab-bar-mouse-down-1)
+    ("<mouse-1>" . pi-deck-tab-bar-mouse-1)
+    ("<mouse-2>" . pi-deck-tab-bar-mouse-2)
+    ;; Menus open on release: a text terminal menu opened on press picks
+    ;; its first item at the release.
+    ("<down-mouse-3>" . ignore)
+    ("<mouse-3>" . pi-deck-tab-bar-mouse-3))
+  "`tab-bar-map' bindings installed by `pi-deck-mode'.")
+
+;;;; Names
+
+(defun pi-deck--tab-main-agent (&optional frame)
+  "Return the agent FRAME's current tab is named after, or nil.
+That is the first Pi agent in window order (top left first), else the first
+terminal; side windows do not count, so the name never depends on the
+selected window."
+  (let ((agents (delq nil (mapcar (lambda (window)
+                                    (unless (window-parameter window 'window-side)
+                                      (let ((buffer (window-buffer window)))
+                                        (pi-deck-agent (or (pilish-session-chat-buffer buffer)
+                                                           buffer)))))
+                                  (window-list frame 'no-minibuf (frame-first-window frame))))))
+    (or (cl-find 'pi agents :key #'pi-deck-agent-kind) (car agents))))
 
 (defun pi-deck-tab-name ()
-  "Name a tab after the agent in its selected window, else after its buffer.
-Pi agents are \"pi:NAME\", terminals their buffer name without stars.
-Explicitly renamed tabs keep their names."
-  (let* ((window (or (minibuffer-selected-window)
-                     (and (window-minibuffer-p) (get-mru-window))
-                     (selected-window)))
-         ;; Side windows such as the sidebar do not name tabs.
-         (window (if (window-parameter window 'window-side)
-                     (pi-deck--main-window (window-frame window))
-                   window))
-         (buffer (window-buffer window))
-         (agent (pi-deck-agent (or (pilish-session-chat-buffer buffer) buffer))))
-    (cond ((null agent) (tab-bar-tab-name-current))
-          ((eq (pi-deck-agent-kind agent) 'pi) (concat "pi:" (pi-deck-agent-name agent)))
-          (t (pi-deck-agent-name agent)))))
+  "Name the current tab after its main agent (see `pi-deck--tab-main-agent').
+Without agents, the main window's buffer names it.  Explicitly renamed tabs
+keep their names."
+  (let ((agent (pi-deck--tab-main-agent)))
+    (if agent
+        (pi-deck-agent-name agent)
+      (buffer-name (window-buffer (pi-deck--main-window))))))
+
+;;;; Installing
 
 (defun pi-deck-tab-bar-apply ()
   "Apply pi-deck's tab bar settings."
   (setq tab-bar-format (pi-deck--tab-bar-format)
-        tab-bar-tab-group-format-function #'pi-deck-tab-group-format
         tab-bar-tab-name-function #'pi-deck-tab-name)
-  (add-to-list 'tab-bar-tab-name-format-functions #'pi-deck-tab-name-icon)
   (force-mode-line-update t))
 
 (defun pi-deck-tab-bar-enable ()
@@ -129,16 +268,22 @@ Explicitly renamed tabs keep their names."
   (unless pi-deck--saved-tab-bar-settings
     (setq pi-deck--saved-tab-bar-settings
           (list (cons 'tab-bar-format tab-bar-format)
-                (cons 'tab-bar-tab-group-format-function tab-bar-tab-group-format-function)
                 (cons 'tab-bar-tab-name-function tab-bar-tab-name-function)
-                (cons 'tab-bar-tab-name-format-functions tab-bar-tab-name-format-functions))))
+                (cons 'bindings (mapcar (lambda (binding)
+                                          (cons (car binding) (keymap-lookup tab-bar-map (car binding))))
+                                        pi-deck--tab-bar-bindings)))))
+  (dolist (binding pi-deck--tab-bar-bindings)
+    (keymap-set tab-bar-map (car binding) (cdr binding)))
   (pi-deck-tab-bar-apply)
   (tab-bar-mode 1))
 
 (defun pi-deck-tab-bar-disable ()
   "Restore the tab bar settings from before pi-deck."
   (dolist (cell pi-deck--saved-tab-bar-settings)
-    (set (car cell) (cdr cell)))
+    (if (eq (car cell) 'bindings)
+        (dolist (binding (cdr cell))
+          (keymap-set tab-bar-map (car binding) (cdr binding)))
+      (set (car cell) (cdr cell))))
   (setq pi-deck--saved-tab-bar-settings nil)
   (force-mode-line-update t))
 
@@ -151,16 +296,12 @@ Explicitly renamed tabs keep their names."
      (pi-deck-tab-bar-apply)
      (message "%s: %s" ',variable (if ,variable "on" "off"))))
 
-(pi-deck--define-toggle pi-deck-toggle-tab-groups pi-deck-tab-bar-groups
-  "Toggle grouping tabs by space in the tab bar.")
 (pi-deck--define-toggle pi-deck-toggle-status-cell pi-deck-tab-bar-status-cell
   "Toggle the tab bar status summary.")
 (pi-deck--define-toggle pi-deck-toggle-tab-icons pi-deck-tab-bar-icons
-  "Toggle status icons before tab and space names.")
-(pi-deck--define-toggle pi-deck-toggle-inactive-group-tabs tab-bar-show-inactive-group-tabs
-  "Toggle showing the tabs of other spaces.")
-(pi-deck--define-toggle pi-deck-toggle-tab-hints tab-bar-tab-hints
-  "Toggle tab numbers in the tab bar.")
+  "Toggle status icons on tabs and the space button.")
+(pi-deck--define-toggle pi-deck-toggle-tab-numbers pi-deck-tab-numbers
+  "Toggle tab numbers within the space.")
 
 (defun pi-deck-toggle-tab-bar ()
   "Toggle showing the tab bar (tabs remain)."

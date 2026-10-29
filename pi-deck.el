@@ -13,12 +13,16 @@
 ;; driven through Pilish:
 ;;
 ;; - spaces (tab groups per project) holding tabs (window layouts) whose
-;;   panes are Pilish chats or ghostel terminals;
-;; - a pinned root tab with an overview of every agent, the daemon status
-;;   and layout/tab bar controls;
+;;   panes are Pilish chats or ghostel terminals, each with a title bar;
+;; - a tab bar showing the current space's tabs, a space menu, the
+;;   overview button and a status summary, all usable by mouse;
+;; - a sidebar space tree and an overview of every agent with the daemon
+;;   status, layout and tab bar controls and a key sheet;
 ;; - status per agent (blocked, done, working, idle, unknown) with seen
-;;   tracking, rolled up to tabs and spaces, a tab bar status cell, a
-;;   sidebar, a goto picker and next-attention navigation;
+;;   tracking, rolled up to tabs and spaces, a goto picker and
+;;   next-attention navigation;
+;; - Herdr-style closing: closing a tab, pane or space stops what only it
+;;   shows, asking first when that is busy;
 ;; - notifications when agents need attention or finish;
 ;; - persistence of spaces, tabs and sessions across daemon restarts.
 ;;
@@ -30,7 +34,10 @@
 (require 'pi-deck-core)
 (require 'pi-deck-spaces)
 (require 'pi-deck-workers)
+(require 'pi-deck-close)
+(require 'pi-deck-headers)
 (require 'pi-deck-overview)
+(require 'pi-deck-menus)
 (require 'pi-deck-goto)
 (require 'pi-deck-notify)
 (require 'pi-deck-tabbar)
@@ -102,7 +109,14 @@ wherever you are typing."
     (pi-deck-overview-refresh-visible)))
 
 (defun pi-deck--on-tab-select (&rest _)
-  "Update seen flags, the sidebar and visible views after a tab switch."
+  "Repair pairs; update seen flags, the sidebar and views after a tab switch.
+Restored window configurations can lose the pairs' atoms; Pilish repairs
+them at the next redisplay, but commands running before it (menu items
+that switch tabs and then split) need them now."
+  (with-demoted-errors "pi-deck: %S"
+    (save-selected-window
+      (pi-deck--select-ordinary-window)
+      (pilish-repair-window-pairs)))
   (pi-deck--sidebar-sync)
   (pi-deck-mark-visible-seen)
   (pi-deck-overview-refresh-visible))
@@ -118,6 +132,7 @@ wherever you are typing."
     (pi-deck-agent-change-functions . pi-deck-notify-transition)
     (pi-deck-agent-change-functions . pi-deck--save-on-agent-change)
     (pi-deck-update-hook . pi-deck-overview-refresh-visible)
+    (pi-deck-update-hook . pi-deck-headers-update)
     (pi-deck-update-hook . pi-deck--save-on-structure-change)
     (window-configuration-change-hook . pi-deck-schedule-save)
     (kill-buffer-hook . pi-deck--on-kill-buffer)
@@ -125,7 +140,7 @@ wherever you are typing."
     (window-selection-change-functions . pi-deck-mark-visible-seen)
     (tab-bar-tab-post-select-functions . pi-deck--on-tab-select)
     (tab-bar-tab-post-open-functions . pi-deck--on-tab-select)
-    (tab-bar-tab-prevent-close-functions . pi-deck--prevent-root-close)
+    (tab-bar-tab-prevent-close-functions . pi-deck--tab-close-guard)
     (server-after-make-frame-hook . pi-deck--on-server-frame)
     (delete-frame-functions . pi-deck-remember-frame)
     (window-setup-hook . pi-deck-land-on-root)
@@ -166,6 +181,7 @@ wherever you are typing."
     (when pi-deck--save-timer (pi-deck--save-now))
     (setq pilish-extension-dialog-style pi-deck--previous-dialog-style)
     (unless pi-deck--previous-pairing (pilish-window-pairing-mode -1))
+    (pi-deck-headers-update)
     (pi-deck-tab-bar-disable)))
 
 (provide 'pi-deck)

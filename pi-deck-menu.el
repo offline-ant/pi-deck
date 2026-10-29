@@ -12,6 +12,7 @@
 (require 'transient)
 (require 'pi-deck-core)
 (require 'pi-deck-spaces)
+(require 'pi-deck-close)
 (require 'pi-deck-overview)
 (require 'pi-deck-goto)
 (require 'pi-deck-layout)
@@ -30,14 +31,14 @@
     ("+" "create" pi-deck-create-space)
     ("s" "switch" pi-deck-switch-space)
     ("R" "rename" pi-deck-rename-space)
-    ("K" "close" pi-deck-close-space)
-    ("d" "root/back" pi-deck-root)]
+    ("K" "close (stops its agents)" pi-deck-close-space)
+    ("d" "overview/back" pi-deck-root)]
    ["Tabs"
     ("t" "new" pi-deck-new-tab)
     ("]" "next" pi-deck-next-tab :transient t)
     ("[" "previous" pi-deck-previous-tab :transient t)
     ("r" "rename" pi-deck-rename-tab)
-    ("X" "close" pi-deck-close-tab)]
+    ("X" "close (stops its agents)" pi-deck-close-tab)]
    ["Agents"
     ("a" "new Pi agent" pi-deck-new-agent)
     ("e" "new shell" pi-deck-new-shell)
@@ -53,13 +54,8 @@
     ("=" "repair panes" pi-deck-repair-tab)
     ("l" "layout preset" pi-deck-apply-layout)]]
   [["Tab bar"
-    ("G" (lambda () (pi-deck-menu--toggle-description "groups" 'pi-deck-tab-bar-groups))
-     pi-deck-toggle-tab-groups :transient t)
-    ("I" (lambda () (pi-deck-menu--toggle-description "other spaces' tabs"
-                                                      'tab-bar-show-inactive-group-tabs))
-     pi-deck-toggle-inactive-group-tabs :transient t)
-    ("H" (lambda () (pi-deck-menu--toggle-description "numbers" 'tab-bar-tab-hints))
-     pi-deck-toggle-tab-hints :transient t)
+    ("H" (lambda () (pi-deck-menu--toggle-description "numbers" 'pi-deck-tab-numbers))
+     pi-deck-toggle-tab-numbers :transient t)
     ("C" (lambda () (pi-deck-menu--toggle-description "status cell" 'pi-deck-tab-bar-status-cell))
      pi-deck-toggle-status-cell :transient t)
     ("O" (lambda () (pi-deck-menu--toggle-description "icons" 'pi-deck-tab-bar-icons))

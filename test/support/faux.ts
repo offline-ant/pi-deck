@@ -10,7 +10,8 @@ export default function piDeckFaux(pi: ExtensionAPI): void {
     return typeof message.content === "string" ? message.content
       : message.content.flatMap((item) => item.type === "text" ? [item.text] : []).join("\n");
   };
-  // Prompts containing "slow" stay working for a few seconds (manual checks);
+  // Prompts containing "slow" stay working for four seconds, "slow N" for N
+  // seconds (manual checks);
   // "open panel NAME" / "close panel NAME" call the orchestration panel tools;
   // "run worker" starts an orchestration `do` worker.
   provider.setResponses(Array.from({ length: 100 }, () => async (context: TranscriptContext) => {
@@ -27,7 +28,8 @@ export default function piDeckFaux(pi: ExtensionAPI): void {
         : fauxToolCall("panel-close", { name: panel[2] });
       return fauxAssistantMessage([call], { stopReason: "toolUse" });
     }
-    if (text.includes("slow")) await new Promise((resolve) => setTimeout(resolve, 4000));
+    const slow = /slow(?: (\d+))?/.exec(text);
+    if (slow) await new Promise((resolve) => setTimeout(resolve, 1000 * Number(slow[1] ?? 4)));
     return fauxAssistantMessage(`faux reply: ${text}`);
   }));
   pi.registerProvider(provider.provider);

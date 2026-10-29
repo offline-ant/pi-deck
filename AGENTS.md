@@ -10,12 +10,15 @@ Pilish. User documentation: `README.md`.
 | `pi-deck.el` | `pi-deck-mode`, `pi-deck-command-map`, hooks and timers |
 | `pi-deck-core.el` | agent registry, state derivation, seen/done, priority, terminal prompt marks |
 | `pi-deck-spaces.el` | space registry, tab helpers, agent locations, space/tab/pane commands, reveal |
-| `pi-deck-workers.el` | orchestration panels shown in the parent's space, closed-worker records and read-only views |
+| `pi-deck-workers.el` | orchestration panels and forks placed in the parent's space, closed-worker records and read-only views |
+| `pi-deck-close.el` | Herdr-style closing: stop plans for tabs, panes, agents and spaces, confirmation (popup dialog from the mouse), stopping and view removal, the tab close guard |
+| `pi-deck-headers.el` | pane title bars (header lines with status, model/context or exit, `[⤢]` `[✕]`) |
 | `pi-deck-keys.el` | key sheet: live keymap lookups, cached column layout, clickable entries |
-| `pi-deck-overview.el` | root tab, `*pi-deck*` overview (ends with the key sheet), sidebar (clickable rows), landing new frames on root |
+| `pi-deck-overview.el` | hidden root (overview) tab, `*pi-deck*` overview (ends with the key sheet), sidebar space tree (clickable rows and buttons), landing new frames on the overview |
+| `pi-deck-menus.el` | popup menus: spaces, new tab, and right-click menus for agents, closed workers, spaces and tabs |
 | `pi-deck-goto.el` | agent picker, jump, next attention/agent, dialog answering |
 | `pi-deck-notify.el` | blocked/finished notifications |
-| `pi-deck-tabbar.el` | tab bar status cell, icons, toggles, preferences file |
+| `pi-deck-tabbar.el` | per-space tab bar (`tab-bar-format`), its `tab-bar-map` mouse bindings, stable tab names, status cell, toggles, preferences file |
 | `pi-deck-layout.el` | layout presets |
 | `pi-deck-persist.el` | state file, restore, frame setup/mirroring |
 | `pi-deck-daemon.el` | server info, config reload, daemon restart |
@@ -23,8 +26,9 @@ Pilish. User documentation: `README.md`.
 | `test/pi-deck-test.el` | ERT suite (fake Pilish sessions, real ghostel terminals/tab bar) |
 | `test/smoke.sh`, `test/smoke.el`, `test/support/faux.ts` | real Pi smoke in a disposable daemon |
 
-Dependency order: core → spaces → workers → keys → overview → goto/notify/tabbar/layout/persist
-→ daemon/menu → pi-deck. No cycles; forward references use `declare-function`.
+Dependency order: core → spaces → workers → close → headers/keys → overview → menus →
+goto/notify/tabbar/layout/persist → daemon/menu → pi-deck. No cycles; forward
+references use `declare-function`.
 
 ## Rules
 
@@ -57,6 +61,23 @@ Dependency order: core → spaces → workers → keys → overview → goto/not
   `pi-deck--single-window` reduces a tab to one plain window.
 - Only root and space tabs are saved or mirrored; tabs outside spaces stay
   frame-local.
+- The tab bar renders only the current space's tabs as ordinary `tab-N` /
+  `current-tab` items (non-current tabs keep a nil binding so tab-bar selects
+  them); pi-deck's own items are keyed `pi-deck-*` and run on release through
+  pi-deck's `tab-bar-map` bindings. Popup menus open on release (`mouse-3`,
+  never `down-mouse-3`): a text terminal menu opened on press picks its first
+  item at the release.
+- Closing goes through `pi-deck--tab-close-guard`
+  (`tab-bar-tab-prevent-close-functions`) and `pi-deck-close-*`; pi-deck's own
+  tab closes bind `pi-deck--closing-internally` (`pi-deck--close-tabs-internally`).
+  Stop confirmations put Cancel first (text terminal dialogs select the
+  highlighted item on any click). Stopping removes views before killing.
+- Header line buttons use `local-map` (header lines ignore `keymap`).
+- The pseudo-space for agents without a space is labelled "other"; a real
+  space may have that name, so test registration (`pi-deck-space-names`),
+  never the label.
+- Tab-bar restores can drop the pairs' atoms; `pi-deck--on-tab-select` repairs
+  pairs at once so commands right after a tab switch see them.
 - State saves are event-driven (`pi-deck-schedule-save`): never add
   periodic saving. Preferences changed by commands (sidebar toggle) are
   saved with `pi-deck-save-preference`.
@@ -84,8 +105,8 @@ make smoke    # real Pi/faux in a disposable daemon, including restart
   between open frames.
 - Tabs created while the daemon has no client frame stay on its initial frame and do
   not reach the next client (`pi-deck--last-tabs` updates only with a client frame).
-- A tab's automatic name follows its selected window, so opening a panel from the
-  sidebar renames the agent's tab.
+- Mirrored frames copy tabs, so closing a tab counts views in its own frame only: an
+  agent shown in a mirrored frame's copy of the tab still stops.
 - Evil's `SPC w r` (`evil-window-rotate-downwards`) with the sidebar open can leave
   two pairs showing the same session (Evil's side-window save/restore fails to put
   chat states into input-sized windows); the pairs stay consistent.

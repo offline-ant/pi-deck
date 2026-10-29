@@ -4,17 +4,26 @@
 
 ;;; Commentary:
 
-;; The root space's pinned tab shows `*pi-deck*': daemon status, then every
-;; agent grouped by space and tab (workers nested under their parent), with
-;; status filters and a priority sort.  The sidebar shows the same agents
-;; compactly in a side window that follows tab switches.  The overview ends
-;; with the key sheet (`pi-deck-keys').
+;; The overview (`*pi-deck*', shown by the tab bar's ⌂ in the hidden root
+;; tab) lists daemon status, then every agent grouped by space and tab
+;; (workers nested under their parent), with status filters and a priority
+;; sort.  It ends with the key sheet (`pi-deck-keys').
+;;
+;; The sidebar (a side window on the left of every other tab) is a space
+;; tree: ⌂ Overview, then each space as a header (status, ▸/▾ fold, name,
+;; `+' menu) with its agents, workers and panels nested under their parent,
+;; each with a ✕ that stops it, and a final "+ New space" row.
+;;
+;; Both views are mouse-driven: mouse-1 acts (jump, visit a space, fold,
+;; stop), mouse-2 shows an agent beside the current pane, mouse-3 opens the
+;; row's context menu.
 
 ;;; Code:
 
 (require 'pi-deck-core)
 (require 'pi-deck-spaces)
 (require 'pi-deck-workers)
+(require 'pi-deck-close)
 (require 'pi-deck-keys)
 
 (declare-function pi-deck-save-preference "pi-deck-tabbar" (variable))
@@ -23,6 +32,10 @@
 (declare-function pi-deck-menu "pi-deck-menu" ())
 (declare-function pi-deck-answer-dialog "pi-deck-goto" (&optional agent))
 (declare-function pi-deck-jump "pi-deck-goto" (agent))
+(declare-function pi-deck-popup "pi-deck-menus" (menu &optional event))
+(declare-function pi-deck-agent-menu "pi-deck-menus" (agent))
+(declare-function pi-deck-space-menu "pi-deck-menus" (space))
+(declare-function pi-deck-finished-worker-menu "pi-deck-menus" (record))
 (declare-function evil-set-initial-state "evil-core" (mode state))
 (declare-function evil-define-key* "evil-core" (state keymap key def &rest bindings))
 
@@ -66,18 +79,48 @@
 (defvar-local pi-deck-overview--expanded-workers nil
   "Parent agent buffers whose closed workers are listed.")
 
+(defvar-local pi-deck-overview--current-space nil
+  "Space of the selected tab while rendering, highlighted in the sidebar.")
+
+(defvar-local pi-deck-overview--shown nil
+  "Agents shown in the selected tab while rendering, in bold in the sidebar.")
+
+(defface pi-deck-current-space '((t :inherit bold :underline t))
+  "Face for the current space's name in the sidebar."
+  :group 'pi-deck)
+
+(defface pi-deck-button '((t :inherit shadow))
+  "Face for the sidebar's ✕ and + buttons."
+  :group 'pi-deck)
+
 (defvar-keymap pi-deck-overview-row-map
   :doc "Mouse bindings of overview and sidebar rows."
-  "<mouse-1>" #'pi-deck-overview-mouse-jump
-  "<mouse-2>" #'pi-deck-overview-mouse-show)
+  "<mouse-1>" #'pi-deck-overview-mouse-1
+  "<mouse-2>" #'pi-deck-overview-mouse-show
+  ;; Menus open on release: a text terminal menu opened on press picks
+  ;; its first item at the release.
+  "<down-mouse-3>" #'ignore
+  "<mouse-3>" #'pi-deck-overview-mouse-3)
 
 (defun pi-deck-overview--clickable (string help)
   "Return STRING as a clickable row with HELP shown on hover."
   (add-text-properties 0 (max 0 (1- (length string)))
-                       (list 'mouse-face 'highlight 'help-echo help
+                       (list 'mouse-face 'highlight 'help-echo help 'pointer 'hand
                              'keymap pi-deck-overview-row-map)
                        string)
   string)
+
+(defun pi-deck-overview--button (label action help)
+  "Return LABEL as a button running ACTION (see `pi-deck-overview-mouse-1').
+HELP is shown on hover."
+  (propertize label 'pi-deck-button action 'face 'pi-deck-button
+              'mouse-face 'highlight 'help-echo help 'pointer 'hand))
+
+(defun pi-deck-overview--right (button)
+  "Return BUTTON aligned to the right edge of the window."
+  ;; One column more than BUTTON: text terminals reserve the last one.
+  (concat (propertize " " 'display `(space :align-to (- right ,(+ 2 (string-width button)))))
+          button))
 
 ;;;; Rendering
 
@@ -113,8 +156,13 @@
          (indent (make-string (* 2 depth) ?\s))
          (line
           (if pi-deck-overview--compact
-              (concat " " indent (pi-deck-status-icon status) " " name
-                      (when detail (propertize (concat "  " detail) 'face 'shadow)))
+              (concat "   " indent (pi-deck-status-icon status) " "
+                      (truncate-string-to-width
+                       (concat (if (memq agent pi-deck-overview--shown) (propertize name 'face 'bold) name)
+                               (when detail (propertize (concat "  " detail) 'face 'shadow)))
+                       (max 4 (- pi-deck-sidebar-width (length indent) 9)) nil nil "…")
+                      (pi-deck-overview--right
+                       (pi-deck-overview--button "✕" 'stop "mouse-1: stop (asks when busy)")))
             (concat "    " indent (pi-deck-status-icon status) " "
                     (propertize (format "%-8s" status) 'face (pi-deck-status-face status))
                     (format " %-24s" (concat (if (> depth 0) "└ " "")
@@ -129,15 +177,15 @@
                     (if detail (propertize (concat "  " detail) 'face 'pi-deck-blocked) "")))))
     (pi-deck-overview--clickable
      (propertize (concat line "\n") 'pi-deck-agent agent)
-     "mouse-1: jump to this agent; mouse-2: show it in another window")))
+     "mouse-1: jump to this agent; mouse-2: show it beside; mouse-3: menu")))
 
 (defun pi-deck-overview--insert-finished (agent depth)
   "Insert AGENT's closed workers at tree DEPTH: a count, or the list."
   (when-let* ((buffer (pi-deck-agent-buffer agent))
-              (records (and (not pi-deck-overview--compact)
-                            (null pi-deck-overview--filter)
+              (records (and (null pi-deck-overview--filter)
                             (pi-deck-finished-workers buffer))))
-    (let ((indent (concat "    " (make-string (* 2 depth) ?\s)))
+    (let ((indent (concat (if pi-deck-overview--compact "   " "    ")
+                          (make-string (* 2 depth) ?\s)))
           (expanded (memq buffer pi-deck-overview--expanded-workers)))
       (insert (pi-deck-overview--clickable
                (propertize
@@ -159,7 +207,7 @@
                                         'face 'shadow)
                             "\n")
                     'pi-deck-worker-record record)
-                   "mouse-1: read this worker's session")))))))
+                   "mouse-1: read this worker's session; mouse-3: menu")))))))
 
 (defun pi-deck-overview--visible-p (agent)
   "Return non-nil when AGENT passes this view's filter."
@@ -167,22 +215,31 @@
       (eq (pi-deck-agent-status agent) pi-deck-overview--filter)))
 
 (defun pi-deck-overview--space-header (space status count)
-  "Return the header line for SPACE with rolled-up STATUS and agent COUNT."
+  "Return the header line for SPACE with rolled-up STATUS and agent COUNT.
+Its arrow folds, its name visits the space and its `+' opens the space's
+menu."
   (let* ((dir (pi-deck-space-dir space))
+         (name (or space "other"))
          (branch (and dir (not pi-deck-overview--compact) (pi-deck-git-branch dir)))
-         (collapsed (member space pi-deck-overview--collapsed)))
+         (collapsed (member name pi-deck-overview--collapsed)))
     (pi-deck-overview--clickable
      (propertize
-      (concat (if collapsed "▸ " "▾ ")
+      (concat (if pi-deck-overview--compact " " "")
+              (pi-deck-overview--button (if collapsed "▸ " "▾ ") 'fold "mouse-1: fold or unfold")
               (pi-deck-status-icon (or status 'idle)) " "
-              (propertize (or space "other") 'face 'bold)
+              (propertize name 'face (if (and space (equal space pi-deck-overview--current-space))
+                                         'pi-deck-current-space
+                                       'bold))
               (propertize (format " (%d)" count) 'face 'shadow)
               (when (and dir (not pi-deck-overview--compact))
                 (propertize (concat "  " (abbreviate-file-name dir)) 'face 'shadow))
               (when branch (propertize (concat "  " branch) 'face 'font-lock-constant-face))
+              (when space
+                (pi-deck-overview--right
+                 (pi-deck-overview--button "+" 'space-menu "mouse-1: new agent, shell or tab")))
               "\n")
-      'pi-deck-space (or space "other"))
-     "mouse-1: fold or unfold this space")))
+      'pi-deck-space name)
+     "mouse-1: switch to this space; mouse-3: menu")))
 
 (defun pi-deck-overview--insert-spaces (agents tab-index)
   "Insert AGENTS grouped by space and tab using TAB-INDEX."
@@ -197,8 +254,8 @@
       (let* ((space (car entry))
              (members (cdr entry))
              (shown (cl-remove-if-not #'pi-deck-overview--visible-p members)))
-        (when (or shown (and (null pi-deck-overview--filter) space
-                             (not (equal space pi-deck-root-name))))
+        (when (and (not (equal space pi-deck-root-name))
+                   (or shown (and (null pi-deck-overview--filter) space)))
           (insert (pi-deck-overview--space-header
                    space (pi-deck-rollup (mapcar #'pi-deck-agent-status members))
                    (length members)))
@@ -260,6 +317,9 @@
          (window-start (and (get-buffer-window) (window-start (get-buffer-window))))
          (tab-index (pi-deck-tab-index))
          (agents (pi-deck-agents)))
+    (setq pi-deck-overview--current-space (pi-deck-current-space)
+          pi-deck-overview--shown
+          (pi-deck--agents-shown-by (mapcar #'window-buffer (window-list nil 'no-minibuf))))
     (erase-buffer)
     (unless pi-deck-overview--compact
       (insert (propertize "pi-deck" 'face 'bold) "  "
@@ -268,20 +328,24 @@
       (dolist (info (pi-deck-daemon-info-lines))
         (insert (propertize info 'face 'shadow) "\n"))
       (insert (propertize
-               (format "filter: %s · sort: %s · RET/click jump  o show  TAB fold  b/w/i/d/D/a filter  s sort  A answer  K stop  + space  N agent  E shell  h keys  m menu\n\n"
+               (format "filter: %s · sort: %s · RET/click jump or visit space  o/mouse-2 beside  mouse-3 menu  TAB fold  b/w/i/d/D/a filter  s sort  A answer  K stop  + space  N agent  E shell  h keys  m menu\n\n"
                        (or pi-deck-overview--filter "all") pi-deck-overview--sort)
                'face 'shadow)))
     (when pi-deck-overview--compact
-      (insert (propertize " + new agent" 'face 'link
-                          'pi-deck-key-command #'pi-deck-sidebar-new-agent
-                          'mouse-face 'highlight 'keymap pi-deck-key-sheet-entry-map
-                          'help-echo "mouse-1, RET: start a Pi agent in this space")
+      (insert (pi-deck-overview--clickable
+               (propertize " ⌂ Overview\n" 'pi-deck-action #'pi-deck-root-show)
+               "mouse-1: overview of all agents")
               "\n"))
     (when (and pi-deck-overview--compact pi-deck-overview--filter)
       (insert (propertize (format " filter: %s\n" pi-deck-overview--filter) 'face 'shadow)))
     (if (eq pi-deck-overview--sort 'priority)
         (pi-deck-overview--insert-priority agents tab-index)
       (pi-deck-overview--insert-spaces agents tab-index))
+    (when pi-deck-overview--compact
+      (insert "\n" (pi-deck-overview--clickable
+                    (propertize (concat " " (propertize "+ New space" 'face 'link) "\n")
+                                'pi-deck-action #'pi-deck-create-space)
+                    "mouse-1: create a space for a project directory")))
     (setq pi-deck-overview--sheet-width nil)
     (when (and pi-deck-key-sheet (not pi-deck-overview--compact))
       (let ((width (if-let* ((window (get-buffer-window nil t)))
@@ -320,32 +384,69 @@ Interactively, also look up the key sheet's keys again."
   (or (get-text-property (line-beginning-position) 'pi-deck-agent)
       (user-error "No agent on this line")))
 
+(defun pi-deck-overview-visit-space (space)
+  "Unfold SPACE in this view and switch to its most recent tab."
+  (setq pi-deck-overview--collapsed (delete space pi-deck-overview--collapsed))
+  (if (member space (pi-deck-space-names))
+      (pi-deck-select-space space)
+    (pi-deck-overview--render)))
+
 (defun pi-deck-overview-jump ()
-  "Act here: run a key sheet entry, jump to the line's agent, open a
-closed worker, or fold."
+  "Act on this line: run its key sheet entry or action, visit its space,
+open its closed worker, show its closed workers, or jump to its agent."
   (interactive)
   (let ((position (line-beginning-position)))
     (cond
      ((get-text-property (point) 'pi-deck-key-command) (pi-deck-key-sheet-run))
+     ((get-text-property position 'pi-deck-action)
+      (call-interactively (get-text-property position 'pi-deck-action)))
      ((get-text-property position 'pi-deck-worker-record)
       (pi-deck-open-finished-worker (get-text-property position 'pi-deck-worker-record)))
-     ((or (get-text-property position 'pi-deck-space)
-          (get-text-property position 'pi-deck-finished))
-      (pi-deck-overview-toggle))
+     ((get-text-property position 'pi-deck-space)
+      (pi-deck-overview-visit-space (get-text-property position 'pi-deck-space)))
+     ((get-text-property position 'pi-deck-finished) (pi-deck-overview-toggle))
      (t (pi-deck-jump (pi-deck-overview--agent-at-point))))))
 
-(defun pi-deck-overview-mouse-jump (event)
-  "Act on the line clicked in EVENT, like \\[pi-deck-overview-jump]."
+(defun pi-deck-overview-mouse-1 (event)
+  "Act on what EVENT clicked: a ✕, + or fold button, else the line.
+Buttons leave the selected window alone; lines act like \\[pi-deck-overview-jump]."
   (interactive "e")
-  (mouse-set-point event)
-  (pi-deck-overview-jump))
+  (let* ((posn (event-start event))
+         (window (posn-window posn))
+         (position (posn-point posn)))
+    (with-current-buffer (window-buffer window)
+      (let ((row (save-excursion (goto-char position) (line-beginning-position))))
+        (pcase (get-text-property position 'pi-deck-button)
+          ('fold (with-selected-window window
+                   (goto-char position)
+                   (pi-deck-overview-toggle)))
+          ('stop (pi-deck-stop (get-text-property row 'pi-deck-agent) event))
+          ('space-menu (pi-deck-popup (pi-deck-space-menu (get-text-property row 'pi-deck-space))
+                                      event))
+          (_ (mouse-set-point event)
+             (pi-deck-overview-jump)))))))
 
 (defun pi-deck-overview-mouse-show (event)
-  "Show the agent clicked in EVENT in another window."
+  "Show the agent clicked in EVENT beside the current pane."
   (interactive "e")
-  (mouse-set-point event)
-  (when (get-text-property (line-beginning-position) 'pi-deck-agent)
-    (pi-deck-overview-show)))
+  (let ((posn (event-start event)))
+    (when-let* ((agent (with-current-buffer (window-buffer (posn-window posn))
+                         (get-text-property (posn-point posn) 'pi-deck-agent))))
+      (pi-deck-show-beside agent))))
+
+(defun pi-deck-overview-mouse-3 (event)
+  "Open the context menu of the line clicked in EVENT."
+  (interactive "e")
+  (let* ((posn (event-start event))
+         (position (posn-point posn))
+         (menu (with-current-buffer (window-buffer (posn-window posn))
+                 (let ((agent (get-text-property position 'pi-deck-agent))
+                       (space (get-text-property position 'pi-deck-space))
+                       (record (get-text-property position 'pi-deck-worker-record)))
+                   (cond (agent (pi-deck-agent-menu agent))
+                         ((and space (pi-deck-space space)) (pi-deck-space-menu space))
+                         (record (pi-deck-finished-worker-menu record)))))))
+    (when menu (pi-deck-popup menu event))))
 
 (defun pi-deck-overview-toggle ()
   "Fold the space at point, or show or hide the closed workers at point."
@@ -360,15 +461,10 @@ closed worker, or fold."
     (pi-deck-overview-toggle-space)))
 
 (defun pi-deck-overview-show ()
-  "Show the agent at point in another window, keeping this view selected.
-From the sidebar, the agent replaces the main view."
+  "Show the agent at point beside the current pane, keeping this view selected."
   (interactive)
-  (let ((agent (pi-deck-overview--agent-at-point)))
-    (save-selected-window
-      (if pi-deck-overview--compact
-          (pi-deck--display-agent-in-window agent (pi-deck--pane-window))
-        (display-buffer (pi-deck-agent-buffer agent) '(display-buffer-pop-up-window))))
-    (pi-deck-mark-seen agent)))
+  (save-selected-window
+    (pi-deck-show-beside (pi-deck-overview--agent-at-point))))
 
 (defun pi-deck-overview-toggle-space (&optional space)
   "Collapse or expand SPACE (default: the space at point)."
@@ -418,13 +514,10 @@ From the sidebar, the agent replaces the main view."
   (pi-deck-overview-next (- n)))
 
 (defun pi-deck-overview-stop ()
-  "Stop the agent at point after confirmation."
+  "Stop the agent at point; asks first when it is working or blocked."
   (interactive)
-  (let ((agent (pi-deck-overview--agent-at-point)))
-    (when (yes-or-no-p (format "Stop %s %s? " (pi-deck-agent-kind agent)
-                               (pi-deck-agent-name agent)))
-      (pi-deck-stop-agent agent)
-      (pi-deck-overview--render))))
+  (pi-deck-stop (pi-deck-overview--agent-at-point))
+  (pi-deck-overview--render))
 
 (defun pi-deck-overview-answer ()
   "Answer the dialog of the agent at point."
@@ -445,13 +538,6 @@ From the sidebar, the agent replaces the main view."
   (when-let* ((space (pi-deck-overview--space-at-point)))
     (pi-deck-select-space space))
   (call-interactively #'pi-deck-new-agent))
-
-(defun pi-deck-sidebar-new-agent ()
-  "Start a Pi agent in the current tab's space and show it in the main view.
-On a tab without a space, pick or create one first."
-  (interactive)
-  (pi-deck--enter-pane-space)
-  (pi-deck-new-agent nil))
 
 (defun pi-deck-overview-new-shell ()
   "Open a shell in the space at point (else a space read), and show it."
@@ -584,8 +670,7 @@ The unused tab (see `pi-deck--unused-tab-p') is closed."
              (pi-deck--unused-tab-p))
     (let ((unused (progn (pi-deck-root-ensure) (1+ (tab-bar--current-tab-index)))))
       (pi-deck-root-show)
-      (let ((tab-bar-tab-prevent-close-functions nil))
-        (tab-bar-close-tab unused)))))
+      (pi-deck--close-tabs-internally (list unused)))))
 
 ;;;###autoload
 (defun pi-deck-initial-buffer ()
@@ -603,11 +688,6 @@ Without `pi-deck-mode', return *scratch*."
            (> (length (pi-deck--tabs)) 1))
       (tab-bar-switch-to-recent-tab)
     (pi-deck-root-show)))
-
-(defun pi-deck--prevent-root-close (tab _last-tab-p)
-  "Prevent closing the root TAB (for `tab-bar-tab-prevent-close-functions')."
-  (and (pi-deck-root-tab-p tab) (bound-and-true-p pi-deck-mode)
-       (not (bound-and-true-p pi-deck--closing-root))))
 
 ;;;; Sidebar
 
