@@ -172,6 +172,14 @@ when it is on screen, otherwise in a new tab of the parent's space
 the window or tab opened for it goes too. Workers stay hidden until you
 jump to them.
 
+## Sessions from other frontends
+
+`/switch emacs` in a Pi session elsewhere (Herdr, Tau, a terminal) opens that
+conversation here through `pi-deck-show-session`: a tab in the space whose
+directory contains the session's cwd (created when missing), focused in the
+most recently used client frame. Without a client frame, the next frame shows
+it. An idle view of the same session is reloaded in place instead.
+
 ## Menu, tab bar and preferences
 
 `pi-deck-menu` groups space, tab, agent, pane and layout commands, plus:

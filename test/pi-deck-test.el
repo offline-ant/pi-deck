@@ -36,6 +36,7 @@
           (pi-deck-save-delay nil)
           (pi-deck--finished-workers nil)
           (pi-deck--shown-panels nil)
+          (pi-deck--pending-reveal nil)
           (pi-deck-new-space-action 'dired)
           (pi-deck-test--notifications nil)
           (pi-deck-notify-function
@@ -849,6 +850,42 @@
         (keymap-global-set "C-c d" saved)
         (keymap-global-unset "C-c w m")
         (pi-deck-key-sheet-invalidate)))))
+
+(ert-deftest pi-deck-test-show-session-uses-or-creates-its-space ()
+  (pi-deck-test--with-deck
+    (should (eq pi-orchestration-show-session-function #'pi-deck-show-session))
+    (let ((other (file-name-as-directory (make-temp-file "pi-deck-switch-" t))))
+      (cl-letf (((symbol-function 'pi-deck--client-frames) (lambda () (list (selected-frame))))
+                ((symbol-function 'select-frame-set-input-focus) #'ignore))
+        ;; A directory without a space gets one, with a tab holding the pair.
+        (let ((agent (pi-deck-show-session (pi-deck-test--session other "switched"))))
+          (should (equal (pi-deck-agent-assigned-space agent) (file-name-nondirectory (directory-file-name other))))
+          (should (equal (pi-deck-current-space) (pi-deck-agent-assigned-space agent)))
+          (should (eq (window-buffer) (pilish-session-input-buffer (pi-deck-agent-buffer agent))))
+          (should (get-buffer-window (pi-deck-agent-buffer agent))))
+        ;; An existing space for the directory gets a new tab, from the root too.
+        (pi-deck-create-space dir "space")
+        (pi-deck-root-show)
+        (let* ((tabs (length (pi-deck--space-tab-entries "space")))
+               (agent (pi-deck-show-session (pi-deck-test--session dir "second"))))
+          (should (equal (pi-deck-agent-assigned-space agent) "space"))
+          (should (equal (pi-deck-current-space) "space"))
+          (should (= (length (pi-deck--space-tab-entries "space")) (1+ tabs)))
+          (should (eq (window-buffer) (pilish-session-input-buffer (pi-deck-agent-buffer agent))))
+          ;; Showing it again selects its tab instead of adding one.
+          (pi-deck-root-show)
+          (pi-deck-show-session (pi-deck-agent-buffer agent))
+          (should (= (length (pi-deck--space-tab-entries "space")) (1+ tabs)))))
+      ;; Without a client frame, the next frame shows it.
+      (cl-letf (((symbol-function 'pi-deck--client-frames) (lambda () nil)))
+        (let ((agent (pi-deck-show-session (pi-deck-test--session other "later"))))
+          (should (eq pi-deck--pending-reveal (pi-deck-agent-buffer agent)))
+          (pi-deck-root-show)))
+      (cl-letf (((symbol-function 'pi-deck--client-frames) (lambda () (list (selected-frame)))))
+        (pi-deck-setup-frame (selected-frame)))
+      (should-not pi-deck--pending-reveal)
+      (should (string-match-p "later" (buffer-name (window-buffer))))
+      (delete-directory other t))))
 
 (ert-deftest pi-deck-test-new-frame-lands-on-root ()
   (pi-deck-test--with-deck

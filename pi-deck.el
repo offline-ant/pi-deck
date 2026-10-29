@@ -58,6 +58,8 @@ wherever you are typing."
 (defvar pi-deck--age-ticks 0 "Reconciliations since the overview ages were redrawn.")
 (defvar pi-deck--previous-dialog-style nil "Pilish dialog style before the mode.")
 (defvar pi-deck--previous-pairing nil "Whether `pilish-window-pairing-mode' was on before the mode.")
+(defvar pi-orchestration-show-session-function)
+(declare-function pi-orchestration-show-session "pi-orchestration" (chat))
 
 (defvar-keymap pi-deck-command-map
   :doc "pi-deck commands; bind to a prefix such as \"C-c d\"."
@@ -142,6 +144,9 @@ wherever you are typing."
   (when pi-deck--refresh-timer
     (cancel-timer pi-deck--refresh-timer)
     (setq pi-deck--refresh-timer nil))
+  ;; Sessions opened by `/switch emacs' go to the space for their directory.
+  (setq pi-orchestration-show-session-function
+        (if pi-deck-mode #'pi-deck-show-session #'pi-orchestration-show-session))
   (if pi-deck-mode
       (progn
         (setq pi-deck--previous-dialog-style pilish-extension-dialog-style

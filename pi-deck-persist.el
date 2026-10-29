@@ -296,6 +296,49 @@ frame, or to the next client frame when there is none."
 
 ;;;; Frames
 
+(defvar pi-deck--pending-reveal nil
+  "Chat buffer the next client frame shows, opened while no frame existed.")
+
+(defun pi-deck--recent-client-frame ()
+  "Return the most recently used client frame, or nil."
+  (car (sort (cl-remove-if #'frame-parent (pi-deck--client-frames))
+             :key (lambda (frame) (window-use-time (get-mru-window frame t)))
+             :reverse t)))
+
+(defun pi-deck--show-in-space (agent)
+  "Show AGENT in a tab of its space in the selected frame and focus it.
+A tab already showing it is selected; otherwise a space without tabs gets
+one, and a space with tabs a new tab named after AGENT."
+  (pi-deck-reveal agent (if (pi-deck--space-tab-entries
+                             (pi-deck-agent-assigned-space agent))
+                            'tab
+                          'window))
+  (pi-deck--sidebar-sync))
+
+;;;###autoload
+(defun pi-deck-show-session (chat)
+  "Show the Pi session CHAT in the space for its directory; return its agent.
+That is the closest space containing the directory, created when missing.
+The most recently used client frame shows the session in a tab of that
+space and gets focus; without a client frame, the next one shows it.  While
+`pi-deck-mode' is on, this is `pi-orchestration-show-session-function',
+used by `/switch emacs'."
+  (let* ((agent (pi-deck--track chat 'pi))
+         (dir (pi-deck-agent-directory agent)))
+    (setf (pi-deck-agent-assigned-space agent)
+          (or (pi-deck--space-for-dir dir)
+              (let ((name (pi-deck--unique-space-name
+                           (file-name-nondirectory (directory-file-name dir)))))
+                (pi-deck--register-space name dir)
+                name)))
+    (if-let* ((frame (pi-deck--recent-client-frame)))
+        (progn
+          (select-frame-set-input-focus frame)
+          (pi-deck--show-in-space agent))
+      (setq pi-deck--pending-reveal chat))
+    (pi-deck--schedule-update)
+    agent))
+
 (defun pi-deck-setup-frame (&optional frame)
   "Give the new client FRAME the deck's tabs."
   (let ((frame (or frame (selected-frame))))
@@ -315,7 +358,10 @@ frame, or to the next client frame when there is none."
          (t (pi-deck-root-ensure frame)))
         (with-selected-frame frame
           (pi-deck-land-on-root)
-          (pi-deck--sidebar-sync))))))
+          (pi-deck--sidebar-sync)
+          (when-let* ((chat (prog1 pi-deck--pending-reveal (setq pi-deck--pending-reveal nil)))
+                      (agent (pi-deck-agent chat)))
+            (pi-deck--show-in-space agent)))))))
 
 (defun pi-deck-remember-frame (frame)
   "Keep closing FRAME's tabs for the next client frame."
