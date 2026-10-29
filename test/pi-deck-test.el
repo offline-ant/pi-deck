@@ -1028,12 +1028,30 @@ MARK is `bold' (shown in this tab), `elsewhere' (◦) or nil."
             (should (eq (keymap-lookup (get-text-property close 'local-map header)
                                        "<header-line> <mouse-1>")
                         #'pi-deck-header-close)))))
+      ;; [⑂] forks through /fork-here without touching the draft; a
+      ;; prefix function puts e.g. the window number first.
+      (with-current-buffer chat
+        (let* ((pi-deck-pane-header-prefix-function (lambda () "7"))
+               (header (pi-deck-pane-header))
+               (fork (string-search "[⑂]" header))
+               submitted)
+          (should (string-prefix-p "7 " (substring-no-properties header)))
+          (should (eq (keymap-lookup (get-text-property fork 'local-map header)
+                                     "<header-line> <mouse-1>")
+                      #'pi-deck-header-fork))
+          (cl-letf (((symbol-function 'pilish-submit-prompt)
+                     (lambda (buffer text _callback &optional _behavior)
+                       (push (list buffer text) submitted))))
+            (pi-deck-fork-agent (pi-deck-agent chat))
+            (should (member "Fork" (pi-deck-test--menu-labels (pi-deck-agent-menu (pi-deck-agent chat))))))
+          (should (equal submitted (list (list chat "/fork-here"))))
+          (should (eq (keymap-lookup pi-deck-command-map "f") #'pi-deck-fork))))
       ;; A long name is truncated, never the buttons.
       (let ((long (pi-deck-test--session dir (make-string 80 ?x))))
         (switch-to-buffer long)
         (pi-deck--run-update)
         (let ((header (substring-no-properties (pi-deck-pane-header))))
-          (should (string-match-p "x… *\\[⤢\\] \\[✕\\] \\'" header))
+          (should (string-match-p "x… *\\[⑂\\] \\[⤢\\] \\[✕\\] \\'" header))
           (should (<= (string-width (car (split-string header "\\[⤢\\]")))
                       (window-total-width)))))
       ;; Disabling the mode restores the header line.
@@ -1055,7 +1073,7 @@ MARK is `bold' (shown in this tab), `elsewhere' (◦) or nil."
     (pi-deck-create-space dir "space")
     (let ((chat (pi-deck-test--session dir "a")))
       (should (equal (pi-deck-test--menu-labels (pi-deck-agent-menu (pi-deck-agent chat)))
-                     '("Jump" "Show beside" "Zoom" "Rename…" "--" "Stop")))
+                     '("Jump" "Show beside" "Zoom" "Rename…" "--" "Fork" "Compact" "Copy session file" "--" "Stop")))
       (cl-letf (((symbol-function 'message) #'ignore))
         (with-current-buffer chat
           (pilish--handle-extension-ui-request

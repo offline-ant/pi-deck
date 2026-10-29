@@ -31,6 +31,7 @@
   '(("Agents"
      ("new agent" pi-deck-new-agent :click t)
      ("new shell" pi-deck-new-shell :click t)
+     ("fork agent" pi-deck-fork :click t)
      ("go to agent" pi-deck-goto :click t)
      ("next attention" pi-deck-next-attention :click t)
      ("answer dialog" pi-deck-answer-dialog :click t)

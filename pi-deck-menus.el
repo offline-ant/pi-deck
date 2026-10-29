@@ -21,6 +21,7 @@
 (declare-function pi-deck-answer-dialog "pi-deck-goto" (&optional agent))
 (declare-function pi-deck-root-show "pi-deck-overview" ())
 (declare-function pi-deck-zoom "pi-deck-spaces" ())
+(declare-function pi-deck--current-agent "pi-deck-goto" ())
 
 (defun pi-deck--menu (title entries)
   "Return a menu keymap titled TITLE with ENTRIES.
@@ -104,15 +105,56 @@ omitted."
 
 (defun pi-deck-tab-context-menu (number)
   "Return the context menu of the tab numbered NUMBER in the selected frame."
-  (let ((tab (nth (1- number) (pi-deck--tabs))))
+  (let ((tab (nth (1- number) (pi-deck--tabs)))
+        (agent (pi-deck--tab-pi-agent number)))
     (pi-deck--menu
      (format "Tab %s" (alist-get 'name tab))
-     (list (list "Rename…" (lambda ()
+     (list (list (format "Fork %s" (and agent (pi-deck-agent-name agent)))
+                 (lambda () (pi-deck-fork-agent agent)) agent)
+           (list "Rename…" (lambda ()
                              (tab-bar-rename-tab (read-string "Tab name: " (alist-get 'name tab))
                                                  number)))
            (list "Close" (lambda () (pi-deck-close-tab number)))))))
 
 ;;;; Agents
+
+(defun pi-deck-fork-agent (agent)
+  "Open an independent fork of the Pi AGENT in a new tab of its space.
+Pi's `/fork-here' names it after the session; the draft is untouched and
+a busy agent keeps working."
+  (unless (eq (pi-deck-agent-kind agent) 'pi)
+    (user-error "Only Pi agents can be forked"))
+  (let ((name (pi-deck-agent-name agent)))
+    (pilish-submit-prompt
+     (pi-deck-agent-buffer agent) "/fork-here"
+     (lambda (response)
+       (unless (eq (plist-get response :success) t)
+         (message "pi-deck: forking %s failed: %s" name (plist-get response :error)))))
+    (message "pi-deck: forking %s…" name)))
+
+(defun pi-deck-fork (&optional agent)
+  "Fork AGENT, by default the Pi agent shown in the selected pane."
+  (interactive)
+  (let ((agent (or agent (pi-deck--current-agent))))
+    (unless agent (user-error "No agent in this pane"))
+    (pi-deck-fork-agent agent)))
+
+(defun pi-deck--agent-busy-p (agent)
+  "Return non-nil when the Pi AGENT is working or asking."
+  (memq (pi-deck-agent-state agent) '(working blocked)))
+
+(defun pi-deck--copy-session-file (agent)
+  "Copy the Pi AGENT's session file name to the kill ring."
+  (if-let* ((file (pilish-session-file (pi-deck-agent-buffer agent))))
+      (progn (kill-new file) (message "Copied %s" file))
+    (message "pi-deck: %s has no session file yet" (pi-deck-agent-name agent))))
+
+(defun pi-deck--tab-pi-agent (number)
+  "Return the first Pi agent shown in the tab numbered NUMBER, or nil."
+  (cl-some (lambda (buffer)
+             (let ((agent (pi-deck-agent (or (pilish-session-chat-buffer buffer) buffer))))
+               (and agent (eq (pi-deck-agent-kind agent) 'pi) agent)))
+           (nth 2 (nth (1- number) (pi-deck-tab-index)))))
 
 (defun pi-deck-rename-agent (agent name)
   "Rename AGENT to NAME: a Pi session's name, or a terminal's buffer."
@@ -139,6 +181,14 @@ omitted."
                            (pi-deck-rename-agent agent (read-string "Name: " (pi-deck-agent-name agent)))))
          (list "Answer question" (lambda () (pi-deck-answer-dialog agent))
                (pi-deck-agent-dialogs agent))
+         nil
+         (list "Fork" (lambda () (pi-deck-fork-agent agent)) (eq (pi-deck-agent-kind agent) 'pi))
+         (list "Stop turn" (lambda () (with-current-buffer (pi-deck-agent-buffer agent) (pilish-abort)))
+               (and (eq (pi-deck-agent-kind agent) 'pi) (pi-deck--agent-busy-p agent)))
+         (list "Compact" (lambda () (with-current-buffer (pi-deck-agent-buffer agent) (pilish-compact)))
+               (and (eq (pi-deck-agent-kind agent) 'pi) (not (pi-deck--agent-busy-p agent))))
+         (list "Copy session file" (lambda () (pi-deck--copy-session-file agent))
+               (eq (pi-deck-agent-kind agent) 'pi))
          nil
          (list "Stop" (lambda () (pi-deck-stop agent last-nonmenu-event))))))
 

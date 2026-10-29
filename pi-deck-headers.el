@@ -7,10 +7,11 @@
 ;; Every pane showing an agent (a Pilish chat or a ghostel terminal) gets a
 ;; title bar in its header line:
 ;;
-;;   ◐ main · claude-opus-5-5 · 41%                          [⤢] [✕]
+;;   ◐ main · claude-opus-5-5 · 41%                      [⑂] [⤢] [✕]
 ;;
 ;; status icon, name, then the model and context use for Pi agents or the
-;; exit status for terminals; [⤢] zooms the pane and [✕] closes it
+;; exit status for terminals; [⑂] forks a Pi session (`pi-deck-fork-agent'),
+;; [⤢] zooms the pane and [✕] closes it
 ;; Herdr-style (see `pi-deck-close-pane').  The segment is put in front of
 ;; whatever header line the buffer already has; Pilish's input buffers keep
 ;; their own header line.
@@ -20,11 +21,17 @@
 (require 'pi-deck-core)
 (require 'pi-deck-spaces)
 (require 'pi-deck-close)
+(require 'pi-deck-menus)
 
 (defcustom pi-deck-pane-headers t
   "Whether agent panes get pi-deck title bars in their header lines."
   :type 'boolean
   :group 'pi-deck)
+
+(defvar pi-deck-pane-header-prefix-function nil
+  "Function returning a string put first in a pane title bar, or nil.
+It is called with the pane's window selected, e.g. to show a window
+number; nil adds nothing.")
 
 (defconst pi-deck--header-construct '(:eval (pi-deck-pane-header))
   "Header line construct showing the pane title bar.")
@@ -41,6 +48,12 @@
   (interactive "e")
   (select-window (pi-deck--header-window event))
   (pi-deck-zoom))
+
+(defun pi-deck-header-fork (event)
+  "Fork the Pi agent whose title bar EVENT clicked; see `pi-deck-fork-agent'."
+  (interactive "e")
+  (with-current-buffer (window-buffer (pi-deck--header-window event))
+    (pi-deck-fork-agent (pi-deck-agent (current-buffer)))))
 
 (defun pi-deck-header-close (event)
   "Close the pane whose title bar EVENT clicked; see `pi-deck-close-pane'."
@@ -77,7 +90,15 @@ after TITLE stay visible however long the name and details are."
 (defun pi-deck-pane-header ()
   "Return the title bar of the current buffer's agent pane, or nil."
   (when-let* ((agent (and (bound-and-true-p pi-deck-mode) (pi-deck-agent (current-buffer)))))
-    (let ((buttons (concat (pi-deck--header-button "[⤢]" #'pi-deck-header-zoom
+    (let ((prefix (or (and pi-deck-pane-header-prefix-function
+                           (funcall pi-deck-pane-header-prefix-function))
+                      ""))
+          (buttons (concat (if (eq (pi-deck-agent-kind agent) 'pi)
+                               (concat (pi-deck--header-button "[⑂]" #'pi-deck-header-fork
+                                                               "mouse-1: fork this session (new tab)")
+                                       " ")
+                             "")
+                           (pi-deck--header-button "[⤢]" #'pi-deck-header-zoom
                                                    "mouse-1: zoom this pane (again: restore)")
                            " "
                            (pi-deck--header-button "[✕]" #'pi-deck-header-close
@@ -86,7 +107,7 @@ after TITLE stay visible however long the name and details are."
       (string-replace
        "%" "%%"
        (concat (pi-deck--header-fit
-                (concat " " (pi-deck-status-icon (pi-deck-agent-status agent)) " "
+                (concat prefix " " (pi-deck-status-icon (pi-deck-agent-status agent)) " "
                         (propertize (pi-deck-agent-name agent) 'face 'bold)
                         (mapconcat (lambda (detail) (propertize (concat " · " detail) 'face 'shadow))
                                    (pi-deck--header-details agent) ""))

@@ -78,6 +78,7 @@ wherever you are typing."
   "P" #'pi-deck-previous-agent
   "a" #'pi-deck-new-agent
   "e" #'pi-deck-new-shell
+  "f" #'pi-deck-fork
   "A" #'pi-deck-answer-dialog
   "s" #'pi-deck-switch-space
   "S" #'pi-deck-create-space

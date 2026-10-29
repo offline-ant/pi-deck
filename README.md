@@ -10,7 +10,7 @@ daemon, all usable by mouse in graphical and text frames. Built on Emacs
 
 ```
  ⌂ │ ◐ pi ▾ │ ◐ main ✕ │ tests ✕ │ +                         ◉ 1 blocked · ● 1 done
- ⌂ Overview            │ ◐ main · claude-opus-5-5 · 41%                    [⤢] [✕]
+ ⌂ Overview            │ ◐ main · claude-opus-5-5 · 41%                [⑂] [⤢] [✕]
                        │ …chat…
  ▾ ◐ pi             +  │ …input…
    ◐ main           ✕  │ ○ tests (exit 0)                                  [⤢] [✕]
@@ -108,6 +108,7 @@ overview even before pi-deck sets it up.
 | `N` / `P` | next / previous agent in overview order |
 | `a` | new Pi agent in a new tab of the current space (a tab showing no agent yet is used instead); outside a space, pick a space or **New space…** |
 | `e` | new shell pane (`C-u`: split right) |
+| `f` | fork the Pi agent in the selected pane (as `[⑂]`) |
 | `A` | answer the current agent's pending dialog |
 | `S` / `s` | create space (project directory) / switch space |
 | `R` / `K` | rename / close space (stops its agents; see [Closing](#closing)) |
@@ -226,13 +227,18 @@ Everything works by mouse in graphical and text frames (the config enables
 - **Pane title bars** (header lines of chats and terminals; Pilish's input
   windows keep their own header): status, name, model and context use (Pi)
   or exit status (terminals), truncated with `…` to keep the buttons visible;
-  `[⤢]` zooms, `[✕]` closes the pane.
+  `[⑂]` forks a Pi session (`/fork-here`: a new tab of the same space named
+  `<session>-fork`; the draft is untouched, a busy agent keeps working),
+  `[⤢]` zooms, `[✕]` closes the pane. `pi-deck-pane-header-prefix-function`
+  can put something first, e.g. the window number.
 - **Sidebar and overview**: see [Sidebar](#sidebar); click a space header's
   arrow to fold.
 - **Right-click menus** (`mouse-3`): agent rows (Jump, Show beside, Zoom,
-  Rename…, Answer question when one waits, Stop), closed workers (Open
-  transcript), space headers and the space button (New agent, New shell,
-  New tab, Rename…, Close space), tabs (Rename…, Close).
+  Rename…, Answer question when one waits; for Pi agents Fork, Stop turn
+  while busy, Compact while idle, Copy session file; Stop), closed workers
+  (Open transcript), space headers and the space button (New agent, New
+  shell, New tab, Rename…, Close space), tabs (Fork when the tab shows a Pi
+  agent, Rename…, Close).
 
 ## Closing
 
