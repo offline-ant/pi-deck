@@ -32,6 +32,7 @@
 (declare-function pi-deck-menu "pi-deck-menu" ())
 (declare-function pi-deck-answer-dialog "pi-deck-goto" (&optional agent))
 (declare-function pi-deck-jump "pi-deck-goto" (agent))
+(declare-function pi-deck-show-only "pi-deck-goto" (agent))
 (declare-function pi-deck-popup "pi-deck-menus" (menu &optional event))
 (declare-function pi-deck-agent-menu "pi-deck-menus" (agent))
 (declare-function pi-deck-space-menu "pi-deck-menus" (space))
@@ -100,6 +101,7 @@
   :doc "Mouse bindings of overview and sidebar rows."
   "<mouse-1>" #'pi-deck-overview-mouse-1
   "<mouse-2>" #'pi-deck-overview-mouse-show
+  "<double-mouse-1>" #'pi-deck-overview-mouse-only
   ;; Menus open on release: a text terminal menu opened on press picks
   ;; its first item at the release.
   "<down-mouse-3>" #'ignore
@@ -183,7 +185,7 @@ HELP is shown on hover."
                     (if detail (propertize (concat "  " detail) 'face 'pi-deck-blocked) "")))))
     (pi-deck-overview--clickable
      (propertize (concat line "\n") 'pi-deck-agent agent)
-     "mouse-1: jump to this agent; mouse-2: show it beside; mouse-3: menu")))
+     "mouse-1: jump to this agent; double-click: show only it; mouse-2: show it beside; mouse-3: menu")))
 
 (defun pi-deck-overview--insert-finished (agent depth)
   "Insert AGENT's closed workers at tree DEPTH: a count, or the list."
@@ -458,6 +460,16 @@ Buttons leave the selected window alone; lines act like \\[pi-deck-overview-jump
     (when-let* ((agent (with-current-buffer (window-buffer (posn-window posn))
                          (get-text-property (posn-point posn) 'pi-deck-agent))))
       (pi-deck-show-beside agent))))
+
+(defun pi-deck-overview-mouse-only (event)
+  "Show the agent double-clicked in EVENT as the only pane of its tab.
+The first click already jumped to it; buttons ignore double clicks."
+  (interactive "e")
+  (let* ((posn (event-start event))
+         (agent (with-current-buffer (window-buffer (posn-window posn))
+                  (and (not (get-text-property (posn-point posn) 'pi-deck-button))
+                       (get-text-property (posn-point posn) 'pi-deck-agent)))))
+    (when agent (pi-deck-show-only agent))))
 
 (defun pi-deck-overview-mouse-3 (event)
   "Open the context menu of the line clicked in EVENT."

@@ -541,6 +541,35 @@
           (should (> (length (pi-deck-test--main-windows)) count))
           (should (eq (get-buffer-window pi-deck-sidebar-buffer-name) sidebar))))))))
 
+(ert-deftest pi-deck-test-sidebar-double-click-shows-only-that-agent ()
+  (pi-deck-test--with-large-frame
+   (pi-deck-test--with-deck
+    (pi-deck-create-space dir "space")
+    (let* ((a (pi-deck-test--session dir "a"))
+           (b (pi-deck-test--session dir "b")))
+      (pi-deck--display-agent-in-window (pi-deck-agent a) (selected-window))
+      (pi-deck-show-beside (pi-deck-agent b))
+      (pi-deck-sidebar-toggle)
+      (let* ((sidebar (get-buffer-window pi-deck-sidebar-buffer-name))
+             (row (with-current-buffer (window-buffer sidebar)
+                    (pi-deck-overview-refresh)
+                    (text-property-any (point-min) (point-max) 'pi-deck-agent (pi-deck-agent b)))))
+        (should (eq (lookup-key pi-deck-overview-row-map [double-mouse-1])
+                    #'pi-deck-overview-mouse-only))
+        ;; A double click arrives as mouse-1, then double-mouse-1.
+        (select-window sidebar)
+        (pi-deck-overview-mouse-1 (pi-deck-test--click sidebar row))
+        (pi-deck-overview-mouse-only (pi-deck-test--click sidebar row 'double-mouse-1))
+        (should (equal (mapcar (lambda (window) (pilish-session-chat-buffer (window-buffer window)))
+                               (pi-deck-test--main-windows))
+                       (list b b)))
+        (should-not (get-buffer-window a))
+        (should (eq (get-buffer-window pi-deck-sidebar-buffer-name) sidebar))
+        ;; Zoom brings the other agent back.
+        (pi-deck-zoom)
+        (should (get-buffer-window a))
+        (should (get-buffer-window b)))))))
+
 ;; The sidebar lists agents by home space in creation order: showing,
 ;; revealing or moving them between tabs never reorders it.
 (defun pi-deck-test--sidebar-rows (sidebar)

@@ -652,8 +652,14 @@ With SPLIT (prefix argument), show it in a new window to the right."
     (if (and saved (eq pane (window-main-window)))
         (progn (set-window-configuration saved)
                (setf (alist-get 'pi-deck-zoom (cdr tab) nil 'remove) nil))
-      (setf (alist-get 'pi-deck-zoom (cdr tab)) (current-window-configuration))
-      (delete-other-windows pane))))
+      (pi-deck--zoom-pane pane))))
+
+(defun pi-deck--zoom-pane (pane)
+  "Make PANE the only pane of the tab; `pi-deck-zoom' restores the layout."
+  (setf (alist-get 'pi-deck-zoom (cdr (tab-bar--current-tab-find)))
+        (current-window-configuration))
+  (delete-other-windows pane))
+
 
 (defun pi-deck-repair-tab ()
   "Rebuild the current tab's agent panes.

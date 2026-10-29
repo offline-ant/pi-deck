@@ -107,6 +107,16 @@ See `pi-deck-answer-on-jump'."
   (when (and pi-deck-answer-on-jump (pi-deck-agent-dialogs agent))
     (pi-deck-answer-dialog agent)))
 
+(defun pi-deck-show-only (agent)
+  "Jump to AGENT and zoom its pane, so it is the only agent visible.
+Side windows such as the sidebar stay; \\[pi-deck-zoom] brings back the
+other panes."
+  (pi-deck-jump agent)
+  (when-let* ((window (get-buffer-window (pi-deck-agent-buffer agent)))
+              (pane (pi-deck--pane-of window)))
+    (unless (eq pane (window-main-window))
+      (pi-deck--zoom-pane pane))))
+
 ;;;###autoload
 (defun pi-deck-goto (&optional status)
   "Jump to an agent picked by name, grouped by space.

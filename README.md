@@ -187,7 +187,9 @@ status rollups follow the same rule).
 Clicking an agent jumps to it: the tab showing it is selected; a worker or
 panel whose parent a tab shows opens beside its parent; any other agent
 replaces the main pane of its space's current tab (`pi-deck-reveal-action`).
-`mouse-2` (or `o`) shows it beside the current pane and keeps the sidebar
+Double-clicking an agent shows it alone: its pane is zoomed, so other
+agents in that tab are hidden while the sidebar stays (`SPC d z` brings them
+back). `mouse-2` (or `o`) shows it beside the current pane and keeps the sidebar
 selected. Pane commands (`SPC d |`, `-`, `z`, `x`, layouts) run from the
 sidebar act on the main view.
 
