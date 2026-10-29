@@ -55,7 +55,8 @@
      ("stop turn" pilish-abort :maps (pilish-input-mode-map pilish-chat-mode-map))
      ("model" pilish-select-model :maps (pilish-input-mode-map pilish-chat-mode-map))
      ("thinking" pilish-cycle-thinking :maps (pilish-input-mode-map pilish-chat-mode-map))
-     ("steer queue" pilish-queue-steering :maps (pilish-input-mode-map))
+     ("steer" pilish-queue-steering :maps (pilish-input-mode-map))
+     ("follow-up" pilish-queue-followup :maps (pilish-input-mode-map))
      ("Pi menu" pilish-menu :maps (pilish-input-mode-map pilish-chat-mode-map)))
     ("Pi asks"
      ("choose" pilish-dialog-choose :maps (pilish-dialog-widget-map))
