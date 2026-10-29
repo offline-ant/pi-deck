@@ -42,6 +42,13 @@ nil (off) select one explicitly."
 (defvar pi-deck-notify-function #'pi-deck-notify-deliver
   "Function called with TITLE, BODY and AGENT to deliver a notification.")
 
+(defvar pi-deck-notify-functions nil
+  "Functions called with KIND, TITLE, BODY and AGENT for every notification.
+KIND is `blocked' or `finished'.  They run on the same transitions as the
+notification itself (`pi-deck-notify-on', `pi-deck-notify-shells', agent
+not visible), also when `pi-deck-notify-method' is nil, e.g. to play a
+sound or notify another machine.")
+
 (defvar pi-deck--dbus-available 'unknown
   "Cached D-Bus notification service availability.")
 
@@ -72,19 +79,21 @@ nil (off) select one explicitly."
     (message "%s: %s" title body)))
 
 (defun pi-deck-notify-transition (agent old new)
-  "Notify about AGENT's change from OLD to NEW base state when it matters."
-  (when (and pi-deck-notify-method
-             (or pi-deck-notify-shells (eq (pi-deck-agent-kind agent) 'pi))
+  "Notify about AGENT's change from OLD to NEW base state when it matters.
+Delivers through `pi-deck-notify-function' unless `pi-deck-notify-method'
+is nil, and runs `pi-deck-notify-functions'."
+  (when (and (or pi-deck-notify-shells (eq (pi-deck-agent-kind agent) 'pi))
              (not (pi-deck-agent-visible-p agent)))
     (let ((kind (cond ((and (eq new 'blocked) (not (eq old 'blocked))) 'blocked)
                       ((and (eq new 'idle) (memq old '(working blocked))) 'finished))))
       (when (memq kind pi-deck-notify-on)
-        (funcall pi-deck-notify-function
-                 (format "%s %s" (pi-deck-agent-name agent)
-                         (if (eq kind 'blocked) "needs attention" "finished"))
-                 (or (pi-deck-agent-detail agent)
-                     (abbreviate-file-name (pi-deck-agent-directory agent)))
-                 agent)))))
+        (let ((title (format "%s %s" (pi-deck-agent-name agent)
+                             (if (eq kind 'blocked) "needs attention" "finished")))
+              (body (or (pi-deck-agent-detail agent)
+                        (abbreviate-file-name (pi-deck-agent-directory agent)))))
+          (when pi-deck-notify-method
+            (funcall pi-deck-notify-function title body agent))
+          (run-hook-with-args 'pi-deck-notify-functions kind title body agent))))))
 
 (provide 'pi-deck-notify)
 ;;; pi-deck-notify.el ends here

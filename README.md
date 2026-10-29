@@ -67,6 +67,10 @@ Notifications follow Herdr: *needs attention* on becoming blocked and
 *finished* on leaving work for idle, both suppressed while the agent is
 visible. They use D-Bus desktop notifications (clicking jumps to the agent)
 when available, else the echo area (`pi-deck-notify-method`).
+`pi-deck-notify-functions` run on the same transitions with the kind
+(`blocked`/`finished`), title, body and agent, also when the method is off;
+pi-sound uses it to play Herdr's sounds and show pop-ups on the machine you
+sit at.
 
 ## Setup
 

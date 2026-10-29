@@ -117,6 +117,19 @@
       ;; Finished while invisible: done until shown.
       (should (eq (pi-deck-agent-status agent) 'done))
       (should (string-match-p "a finished" (car (car pi-deck-test--notifications))))
+      ;; `pi-deck-notify-functions' see the same transitions, with the kind,
+      ;; also when the notification itself is off.
+      (let* ((events nil)
+             (pi-deck-notify-functions
+              (list (lambda (&rest args) (push args events))))
+             (pi-deck-notify-method nil))
+        (setq pi-deck-test--notifications nil)
+        (pi-deck-test--phase chat "thinking")
+        (pi-deck-test--phase chat "idle")
+        (should-not pi-deck-test--notifications)
+        (should (equal (mapcar (lambda (event) (seq-take event 2)) events)
+                       '((finished "a finished"))))
+        (should (eq (nth 3 (car events)) agent)))
       (switch-to-buffer chat)
       (pi-deck-mark-visible-seen)
       (should (eq (pi-deck-agent-status agent) 'idle))

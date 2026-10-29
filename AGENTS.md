@@ -17,7 +17,7 @@ Pilish. User documentation: `README.md`.
 | `pi-deck-overview.el` | hidden root (overview) tab, `*pi-deck*` overview (ends with the key sheet), sidebar space tree (clickable rows and buttons), landing new frames on the overview |
 | `pi-deck-menus.el` | popup menus: spaces, new tab, and right-click menus for agents, closed workers, spaces and tabs |
 | `pi-deck-goto.el` | agent picker, jump, next attention/agent, dialog answering |
-| `pi-deck-notify.el` | blocked/finished notifications |
+| `pi-deck-notify.el` | blocked/finished notifications; `pi-deck-notify-functions` hook for other deliveries (pi-sound) |
 | `pi-deck-tabbar.el` | per-space tab bar (`tab-bar-format`), its `tab-bar-map` mouse bindings, stable tab names, status cell, toggles, preferences file |
 | `pi-deck-layout.el` | layout presets |
 | `pi-deck-persist.el` | state file, restore, frame setup/mirroring |
