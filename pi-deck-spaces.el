@@ -283,11 +283,18 @@ TAB-INDEX caches `pi-deck-tab-index'."
                           (abbreviate-file-name default-directory))
        (read-directory-name "Space directory: ")))))
 
+(defvar pi-deck-overview-buffer-name)
+
 (defun pi-deck--unused-tab-p ()
-  "Return non-nil when the current tab is ungrouped and shows only *scratch*."
+  "Return non-nil when the current tab is ungrouped and unused.
+Unused means one window besides side windows (the sidebar), showing
+*scratch* or the overview (see `pi-deck-initial-buffer')."
   (and (null (pi-deck-current-space))
-       (one-window-p)
-       (equal (buffer-name (window-buffer)) "*scratch*")))
+       (let ((windows (cl-remove-if (lambda (window) (window-parameter window 'window-side))
+                                    (window-list nil 'no-minibuf))))
+         (and (null (cdr windows))
+              (member (buffer-name (window-buffer (car windows)))
+                      (list "*scratch*" pi-deck-overview-buffer-name))))))
 
 (defun pi-deck--make-space (dir &optional name)
   "Register a space for DIR named NAME and select its new, empty tab.

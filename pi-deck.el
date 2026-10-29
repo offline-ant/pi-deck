@@ -126,6 +126,7 @@ wherever you are typing."
     (tab-bar-tab-prevent-close-functions . pi-deck--prevent-root-close)
     (server-after-make-frame-hook . pi-deck--on-server-frame)
     (delete-frame-functions . pi-deck-remember-frame)
+    (window-setup-hook . pi-deck-land-on-root)
     (kill-emacs-hook . pi-deck--save-now))
   "Hooks installed by `pi-deck-mode'.")
 

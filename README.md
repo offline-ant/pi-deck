@@ -71,6 +71,10 @@ API), ghostel 0.59.0 with its native module and, for orchestration workers,
 frame and starts tracking agents. Run Emacs as a daemon (e.g.
 `emacs --daemon=pi`) and attach with `emacsclient -t` or `-c`; each new
 client frame gets the tabs of an existing frame, or of the last closed one.
+A frame with nothing to copy opens on the root tab: its unused initial tab
+(`*scratch*` or the overview) is closed. Set
+`(setq initial-buffer-choice #'pi-deck-initial-buffer)` so a frame shows the
+overview even before pi-deck sets it up.
 
 ## Keys (`pi-deck-command-map`)
 
@@ -103,6 +107,7 @@ uptime, clients, frames, live Pi sessions, socket, orchestration host status,
 notification method and state file. Agents follow, grouped by space
 (directory and branch), then by the tab showing them ("not shown in a tab"
 last); live orchestration workers and panels nest under their parent.
+The key sheet ends the overview (see below).
 
 Workers are ephemeral: Pi closes them once they return, and their buffers
 go. Each parent row is followed by a folded "N finished workers" line;
@@ -123,10 +128,31 @@ sessions" links. The sidebar lists live agents only.
 | `K` | stop the agent at point |
 | `+` `N` `E` | new space; new agent or shell in the space at point (else read) |
 | `g` (`gr` under Evil) | refresh |
+| `h` | show or hide the key sheet (the choice is saved) |
 | `m` `?` | menu |
 | `q` | back to the previous tab |
 
 The sidebar shows the same data compactly and uses the same keys.
+
+### Key sheet
+
+The overview ends with a sheet of about 30 keys for agent control, grouped
+as Agents, Spaces & tabs, Panes, Chat & input, Pi asks (inline dialog
+keys), Windows and Daemon, in as many columns as the window fits (three at
+80 columns, six at 160). Keys come from the live keymaps, so rebinding
+shows up: global commands as you type them in the overview (`SPC d …` under
+an Evil leader, else `C-c d …`), Pilish commands from Pilish's mode maps,
+menu-only commands through the menu (`SPC d m D` restart daemon). Entries
+without a key are omitted. Lookups are cached until a file loads or you
+refresh (`g`/`gr`); layouts are cached per width and redone when the
+window's width changes. Click an entry (or `RET` on it) to run the global
+commands (new agent, go to, new space, menu, …).
+
+`pi-deck-key-sheet` (default on, toggled by `h`) shows it;
+`pi-deck-key-sheet-groups` defines the entries (label, command, and
+`:maps`, `:range`, `:click`); `pi-deck-key-sheet-substitutions` shows your
+own command's key in place of a standard one, e.g.
+`((delete-other-windows . my/toggle-maximize-window))`.
 
 ## Mouse
 
@@ -197,6 +223,7 @@ like Pi's editor).
 `pi-deck-notify-shells`, `pi-deck-notify-bell`, `pi-deck-summary-statuses`,
 `pi-deck-layouts` (add your own presets), `pi-deck-grid-include-shells`,
 `pi-deck-sidebar`, `pi-deck-sidebar-side`, `pi-deck-sidebar-width`,
+`pi-deck-key-sheet`, `pi-deck-key-sheet-groups`, `pi-deck-key-sheet-substitutions`,
 `pi-deck-show-panels`, `pi-deck-panel-height`,
 `pi-deck-finished-workers-limit`, `pi-deck-save-delay`, `pi-deck-status-icons`,
 `pi-deck-mirror-new-frames`, `pi-deck-restart-command`,

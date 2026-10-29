@@ -313,7 +313,9 @@ frame, or to the next client frame when there is none."
          ((and pi-deck-mirror-new-frames pi-deck--last-tabs)
           (pi-deck-apply-tabs pi-deck--last-tabs frame))
          (t (pi-deck-root-ensure frame)))
-        (with-selected-frame frame (pi-deck--sidebar-sync))))))
+        (with-selected-frame frame
+          (pi-deck-land-on-root)
+          (pi-deck--sidebar-sync))))))
 
 (defun pi-deck-remember-frame (frame)
   "Keep closing FRAME's tabs for the next client frame."

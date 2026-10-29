@@ -7,16 +7,19 @@
 ;; The root space's pinned tab shows `*pi-deck*': daemon status, then every
 ;; agent grouped by space and tab (workers nested under their parent), with
 ;; status filters and a priority sort.  The sidebar shows the same agents
-;; compactly in a side window that follows tab switches.
+;; compactly in a side window that follows tab switches.  The overview ends
+;; with the key sheet (`pi-deck-keys').
 
 ;;; Code:
 
 (require 'pi-deck-core)
 (require 'pi-deck-spaces)
 (require 'pi-deck-workers)
+(require 'pi-deck-keys)
 
 (declare-function pi-deck-save-preference "pi-deck-tabbar" (variable))
 (declare-function pi-deck-daemon-info-lines "pi-deck-daemon" ())
+(declare-function pi-deck--client-frames "pi-deck-daemon" ())
 (declare-function pi-deck-menu "pi-deck-menu" ())
 (declare-function pi-deck-answer-dialog "pi-deck-goto" (&optional agent))
 (declare-function pi-deck-jump "pi-deck-goto" (agent))
@@ -56,6 +59,9 @@
 
 (defvar-local pi-deck-overview--collapsed nil
   "Space names whose agents are hidden.")
+
+(defvar-local pi-deck-overview--sheet-width nil
+  "Width the key sheet was last laid out for, or nil without a sheet.")
 
 (defvar-local pi-deck-overview--expanded-workers nil
   "Parent agent buffers whose closed workers are listed.")
@@ -262,7 +268,7 @@
       (dolist (info (pi-deck-daemon-info-lines))
         (insert (propertize info 'face 'shadow) "\n"))
       (insert (propertize
-               (format "filter: %s · sort: %s · RET/click jump  o show  TAB fold  b/w/i/d/D/a filter  s sort  A answer  K stop  + space  N agent  E shell  m menu\n\n"
+               (format "filter: %s · sort: %s · RET/click jump  o show  TAB fold  b/w/i/d/D/a filter  s sort  A answer  K stop  + space  N agent  E shell  h keys  m menu\n\n"
                        (or pi-deck-overview--filter "all") pi-deck-overview--sort)
                'face 'shadow)))
     (when (and pi-deck-overview--compact pi-deck-overview--filter)
@@ -270,6 +276,14 @@
     (if (eq pi-deck-overview--sort 'priority)
         (pi-deck-overview--insert-priority agents tab-index)
       (pi-deck-overview--insert-spaces agents tab-index))
+    (setq pi-deck-overview--sheet-width nil)
+    (when (and pi-deck-key-sheet (not pi-deck-overview--compact))
+      (let ((width (if-let* ((window (get-buffer-window nil t)))
+                       (window-width window)
+                     (frame-width))))
+        (when-let* ((sheet (pi-deck-key-sheet-string (1- width))))
+          (setq pi-deck-overview--sheet-width width)
+          (insert "\n" sheet))))
     (goto-char (point-min))
     (let ((match (or (and agent (text-property-any (point-min) (point-max) 'pi-deck-agent agent))
                      (and space (text-property-any (point-min) (point-max) 'pi-deck-space space)))))
@@ -278,8 +292,10 @@
       (set-window-start (get-buffer-window) (min window-start (point-max)) t))))
 
 (defun pi-deck-overview-refresh (&optional buffer)
-  "Rebuild BUFFER (default current) if it is an overview or sidebar."
+  "Rebuild BUFFER (default current) if it is an overview or sidebar.
+Interactively, also look up the key sheet's keys again."
   (interactive)
+  (when (called-interactively-p 'any) (pi-deck-key-sheet-invalidate))
   (with-current-buffer (or buffer (current-buffer))
     (when (derived-mode-p 'pi-deck-overview-mode)
       (pi-deck-overview--render))))
@@ -299,10 +315,12 @@
       (user-error "No agent on this line")))
 
 (defun pi-deck-overview-jump ()
-  "Act on this line: jump to its agent, open a closed worker, or fold."
+  "Act here: run a key sheet entry, jump to the line's agent, open a
+closed worker, or fold."
   (interactive)
   (let ((position (line-beginning-position)))
     (cond
+     ((get-text-property (point) 'pi-deck-key-command) (pi-deck-key-sheet-run))
      ((get-text-property position 'pi-deck-worker-record)
       (pi-deck-open-finished-worker (get-text-property position 'pi-deck-worker-record)))
      ((or (get-text-property position 'pi-deck-space)
@@ -429,6 +447,14 @@
     (pi-deck-select-space space))
   (call-interactively #'pi-deck-new-shell))
 
+(defun pi-deck-key-sheet-toggle ()
+  "Show or hide the overview's key sheet, remembering the choice."
+  (interactive)
+  (setq pi-deck-key-sheet (not pi-deck-key-sheet))
+  (when-let* ((buffer (get-buffer pi-deck-overview-buffer-name)))
+    (pi-deck-overview-refresh buffer))
+  (with-demoted-errors "pi-deck: %S" (pi-deck-save-preference 'pi-deck-key-sheet)))
+
 (defun pi-deck-overview-quit ()
   "Leave the overview: hide the sidebar, or return from the root tab."
   (interactive)
@@ -460,14 +486,23 @@
   "+" #'pi-deck-create-space
   "N" #'pi-deck-overview-new-agent
   "E" #'pi-deck-overview-new-shell
+  "h" #'pi-deck-key-sheet-toggle
   "m" #'pi-deck-menu
   "?" #'pi-deck-menu
   "q" #'pi-deck-overview-quit)
+
+(defun pi-deck-overview--on-resize (window)
+  "Lay the key sheet out again when WINDOW's width changed."
+  (with-current-buffer (window-buffer window)
+    (when (and pi-deck-overview--sheet-width
+               (/= (window-width window) pi-deck-overview--sheet-width))
+      (pi-deck-overview--render))))
 
 (define-derived-mode pi-deck-overview-mode special-mode "Pi-Deck"
   "Overview of Pi agents, spaces and tabs.
 \\{pi-deck-overview-mode-map}"
   (setq-local truncate-lines t)
+  (add-hook 'window-size-change-functions #'pi-deck-overview--on-resize nil t)
   (hl-line-mode 1))
 
 ;; Evil users stay in normal state, so leader keys, `gg' and `/' keep
@@ -528,6 +563,24 @@
     (switch-to-buffer (pi-deck-overview-buffer)))
   (select-window (get-buffer-window (pi-deck-overview-buffer)))
   (pi-deck-overview-refresh (pi-deck-overview-buffer)))
+
+(defun pi-deck-land-on-root ()
+  "Show the root tab in place of the selected frame's unused initial tab.
+The unused tab (see `pi-deck--unused-tab-p') is closed."
+  (when (and (memq (selected-frame) (pi-deck--client-frames))
+             (pi-deck--unused-tab-p))
+    (let ((unused (progn (pi-deck-root-ensure) (1+ (tab-bar--current-tab-index)))))
+      (pi-deck-root-show)
+      (let ((tab-bar-tab-prevent-close-functions nil))
+        (tab-bar-close-tab unused)))))
+
+;;;###autoload
+(defun pi-deck-initial-buffer ()
+  "Return the overview buffer, for `initial-buffer-choice'.
+Without `pi-deck-mode', return *scratch*."
+  (if (bound-and-true-p pi-deck-mode)
+      (pi-deck-overview-buffer)
+    (get-scratch-buffer-create)))
 
 ;;;###autoload
 (defun pi-deck-root ()

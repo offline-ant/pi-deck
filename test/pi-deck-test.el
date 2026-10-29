@@ -786,6 +786,78 @@
     (pi-deck-load-preferences)
     (should-not pi-deck-sidebar)))
 
+(ert-deftest pi-deck-test-key-sheet-lists-live-bindings ()
+  (pi-deck-test--with-deck
+    (let ((pi-deck-key-sheet t)
+          (pi-deck-key-sheet-substitutions '((delete-other-windows . pi-deck-test-maximize)))
+          (saved (keymap-global-lookup "C-c d"))
+          ran)
+      (keymap-global-set "C-c d" pi-deck-command-map)
+      (keymap-global-set "C-c w m" #'pi-deck-test-maximize)
+      (defalias 'pi-deck-test-maximize #'ignore)
+      (unwind-protect
+          (progn
+            (pi-deck-key-sheet-invalidate)
+            (pi-deck-root-show)
+            (with-current-buffer (pi-deck-overview-buffer)
+              (pi-deck-overview-refresh (current-buffer))
+              (let ((text (buffer-substring-no-properties (point-min) (point-max))))
+                (should (string-match-p "^Keys" text))
+                (should (string-match-p "C-c d a +new agent" text))
+                (should (string-match-p "C-c d 1…9 +tab N" text))
+                (should (string-match-p "C-c d = +repair pairs" text))
+                (should (string-match-p "C-c C-c +send" text))
+                (should (string-match-p "0…9 +choice N" text))
+                ;; A menu-only command is reached through the menu.
+                (should (string-match-p "C-c d m D +restart daemon" text))
+                ;; The substitution's key replaces `delete-other-windows'.
+                (should (string-match-p "C-c w m +maximize" text)))
+              ;; Cached: the same layout until keymaps change.
+              (should (eq (pi-deck-key-sheet-string 79) (pi-deck-key-sheet-string 79)))
+              (keymap-set pi-deck-command-map "a" nil)
+              (keymap-set pi-deck-command-map "c" #'pi-deck-new-agent)
+              (unwind-protect
+                  (progn
+                    (pi-deck-test--refresh-interactively)
+                    (should (string-match-p "C-c d c +new agent" (buffer-string))))
+                (keymap-set pi-deck-command-map "c" nil)
+                (keymap-set pi-deck-command-map "a" #'pi-deck-new-agent))
+              ;; Every line fits 80 columns.
+              (goto-char (point-min))
+              (pi-deck-key-sheet-invalidate)
+              (pi-deck-overview-refresh (current-buffer))
+              (dolist (line (split-string (pi-deck-key-sheet-string 79) "\n"))
+                (should (<= (string-width line) 79)))
+              ;; Clicking an entry runs its command.
+              (let ((entry (text-property-any (point-min) (point-max)
+                                              'pi-deck-key-command 'pi-deck-goto)))
+                (should entry)
+                (should (eq (keymap-lookup (get-text-property entry 'keymap) "<mouse-1>")
+                            #'pi-deck-key-sheet-mouse-run))
+                (cl-letf (((symbol-function 'pi-deck-goto)
+                           (lambda () (interactive) (setq ran t))))
+                  (pi-deck-key-sheet-mouse-run
+                   (list 'mouse-1 (list (get-buffer-window) entry '(0 . 0) 0 nil
+                                        entry '(0 . 0) nil '(0 . 0) '(1 . 1))))))
+              (should ran)
+              ;; `h' hides the sheet and saves the choice.
+              (pi-deck-key-sheet-toggle)
+              (should-not (string-match-p "^Keys" (buffer-string)))
+              (setq pi-deck-key-sheet t)
+              (pi-deck-load-preferences)
+              (should-not pi-deck-key-sheet)))
+        (keymap-global-set "C-c d" saved)
+        (keymap-global-unset "C-c w m")
+        (pi-deck-key-sheet-invalidate)))))
+
+(ert-deftest pi-deck-test-new-frame-lands-on-root ()
+  (pi-deck-test--with-deck
+    (switch-to-buffer (pi-deck-initial-buffer))
+    (should (equal (buffer-name) pi-deck-overview-buffer-name))
+    (pi-deck-land-on-root)
+    (should (pi-deck-root-tab-p (tab-bar--current-tab-find)))
+    (should (= 1 (length (pi-deck--tabs))))))
+
 (ert-deftest pi-deck-test-state-saves-after-changes ()
   (pi-deck-test--with-deck
     (let ((pi-deck-save-delay 0.05))
@@ -805,6 +877,10 @@
         (should (pi-deck-test--wait (lambda () (file-exists-p pi-deck-state-file))))
         (should (cl-find "a" (plist-get (pi-deck-read-state) :agents)
                          :key (lambda (record) (plist-get record :name)) :test #'equal))))))
+
+(defun pi-deck-test--refresh-interactively ()
+  "Refresh the current overview as \\[pi-deck-overview-refresh] does."
+  (funcall-interactively #'pi-deck-overview-refresh))
 
 (provide 'pi-deck-test)
 ;;; pi-deck-test.el ends here

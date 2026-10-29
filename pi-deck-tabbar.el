@@ -47,7 +47,8 @@
 (defconst pi-deck-preference-variables
   '(pi-deck-tab-bar-groups pi-deck-tab-bar-status-cell pi-deck-tab-bar-icons
     tab-bar-show-inactive-group-tabs tab-bar-tab-hints tab-bar-show
-    pi-deck-sidebar pi-deck-sidebar-side pi-deck-sidebar-width pi-deck-reveal-action)
+    pi-deck-sidebar pi-deck-sidebar-side pi-deck-sidebar-width pi-deck-reveal-action
+    pi-deck-key-sheet)
   "Variables saved by `pi-deck-save-preferences'.")
 
 (defvar pi-deck--saved-tab-bar-settings nil
