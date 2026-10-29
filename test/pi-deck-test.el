@@ -568,7 +568,22 @@
         ;; Zoom brings the other agent back.
         (pi-deck-zoom)
         (should (get-buffer-window a))
-        (should (get-buffer-window b)))))))
+        (should (get-buffer-window b))
+        ;; Terminals too.
+        (let* ((shell (pi-deck-start-shell dir "shell:space" '("/bin/sh" "-c" "read line")))
+               (shell-row (progn
+                            (pi-deck-refresh)
+                            (pi-deck-show-beside (pi-deck-agent shell))
+                            (with-current-buffer (window-buffer sidebar)
+                              (pi-deck-overview-refresh)
+                              (text-property-any (point-min) (point-max)
+                                                 'pi-deck-agent (pi-deck-agent shell))))))
+          (should (get-buffer-window shell))
+          (select-window sidebar)
+          (pi-deck-overview-mouse-1 (pi-deck-test--click sidebar shell-row))
+          (pi-deck-overview-mouse-only (pi-deck-test--click sidebar shell-row 'double-mouse-1))
+          (should (equal (mapcar #'window-buffer (pi-deck-test--main-windows)) (list shell)))
+          (should (eq (get-buffer-window pi-deck-sidebar-buffer-name) sidebar))))))))
 
 ;; The sidebar lists agents by home space in creation order: showing,
 ;; revealing or moving them between tabs never reorders it.
