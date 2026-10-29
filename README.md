@@ -10,7 +10,7 @@ daemon, all usable by mouse in graphical and text frames. Built on Emacs
 
 ```
  ⌂ │ ◐ pi ▾ │ ◐ main ✕ │ tests ✕ │ +                         ◉ 1 blocked · ● 1 done
- ⌂ Overview            │ ◐ main · claude-opus-5-5 · 41%                [⑂] [⤢] [✕]
+ ⌂ Overview            │ ◐ main · claude-opus-5-5 · 41%            [↑] [⑂] [⤢] [✕]
                        │ …chat…
  ▾ ◐ pi             +  │ …input…
    ◐ main           ✕  │ ○ tests (exit 0)                                  [⤢] [✕]
@@ -229,6 +229,9 @@ Everything works by mouse in graphical and text frames (the config enables
 - **Pane title bars** (header lines of chats and terminals; Pilish's input
   windows keep their own header): status, name, model and context use (Pi)
   or exit status (terminals), truncated with `…` to keep the buttons visible;
+  `[↑]` toggles, for that session only, whether its chat jumps to the start
+  of the final answer when a turn ends (`pilish-jump-to-answer`; dimmed when
+  off, the default follows that option),
   `[⑂]` forks a Pi session (`/fork-here`: a new tab of the same space named
   `<session>-fork`; the draft is untouched, a busy agent keeps working),
   `[⤢]` zooms, `[✕]` closes the pane. `pi-deck-pane-header-prefix-function`

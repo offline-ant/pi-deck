@@ -12,7 +12,7 @@ Pilish. User documentation: `README.md`.
 | `pi-deck-spaces.el` | space registry, tab helpers, agent locations, space/tab/pane commands, reveal |
 | `pi-deck-workers.el` | orchestration panels and forks placed in the parent's space, closed-worker records and read-only views |
 | `pi-deck-close.el` | Herdr-style closing: stop plans for tabs, panes, agents and spaces, confirmation (popup dialog from the mouse), stopping and view removal, the tab close guard |
-| `pi-deck-headers.el` | pane title bars (header lines with optional prefix, status, model/context or exit, `[⑂]` (Pi) `[⤢]` `[✕]`) |
+| `pi-deck-headers.el` | pane title bars (header lines with optional prefix, status, model/context or exit, `[↑]` `[⑂]` (Pi) `[⤢]` `[✕]`) |
 | `pi-deck-keys.el` | key sheet: live keymap lookups, cached column layout, clickable entries |
 | `pi-deck-overview.el` | hidden root (overview) tab, `*pi-deck*` overview (ends with the key sheet), sidebar space tree (clickable rows and buttons), landing new frames on the overview |
 | `pi-deck-menus.el` | popup menus: spaces, new tab, and right-click menus for agents, closed workers, spaces and tabs; forking (`pi-deck-fork`) |

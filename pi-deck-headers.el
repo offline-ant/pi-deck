@@ -7,11 +7,13 @@
 ;; Every pane showing an agent (a Pilish chat or a ghostel terminal) gets a
 ;; title bar in its header line:
 ;;
-;;   ◐ main · claude-opus-5-5 · 41%                      [⑂] [⤢] [✕]
+;;   ◐ main · claude-opus-5-5 · 41%                  [↑] [⑂] [⤢] [✕]
 ;;
 ;; status icon, name, then the model and context use for Pi agents or the
-;; exit status for terminals; [⑂] forks a Pi session (`pi-deck-fork-agent'),
-;; [⤢] zooms the pane and [✕] closes it
+;; exit status for terminals; [↑] toggles whether the session's chat jumps
+;; to the start of the final answer when a turn ends
+;; (`pilish-toggle-jump-to-answer'; dimmed when off), [⑂] forks a Pi
+;; session (`pi-deck-fork-agent'), [⤢] zooms the pane and [✕] closes it
 ;; Herdr-style (see `pi-deck-close-pane').  The segment is put in front of
 ;; whatever header line the buffer already has; Pilish's input buffers keep
 ;; their own header line.
@@ -49,6 +51,13 @@ number; nil adds nothing.")
   (select-window (pi-deck--header-window event))
   (pi-deck-zoom))
 
+(defun pi-deck-header-jump-to-answer (event)
+  "Toggle answer jumping for the chat whose title bar EVENT clicked.
+See `pilish-jump-to-answer'."
+  (interactive "e")
+  (pilish-toggle-jump-to-answer (window-buffer (pi-deck--header-window event)))
+  (force-mode-line-update t))
+
 (defun pi-deck-header-fork (event)
   "Fork the Pi agent whose title bar EVENT clicked; see `pi-deck-fork-agent'."
   (interactive "e")
@@ -60,10 +69,11 @@ number; nil adds nothing.")
   (interactive "e")
   (pi-deck-close-pane (pi-deck--header-window event) event))
 
-(defun pi-deck--header-button (label command help)
-  "Return header line button LABEL running COMMAND, with HELP."
+(defun pi-deck--header-button (label command help &optional off)
+  "Return header line button LABEL running COMMAND, with HELP.
+OFF dims the button of a toggle that is off."
   (propertize label
-              'face 'header-line-highlight
+              'face (if off '(shadow header-line-highlight) 'header-line-highlight)
               'mouse-face 'mode-line-highlight 'pointer 'hand 'help-echo help
               'local-map (define-keymap
                         "<header-line> <mouse-1>" command
@@ -94,7 +104,16 @@ after TITLE stay visible however long the name and details are."
                            (funcall pi-deck-pane-header-prefix-function))
                       ""))
           (buttons (concat (if (eq (pi-deck-agent-kind agent) 'pi)
-                               (concat (pi-deck--header-button "[⑂]" #'pi-deck-header-fork
+                               (concat (let ((on (buffer-local-value 'pilish-jump-to-answer
+                                                                     (pi-deck-agent-buffer agent))))
+                                         (pi-deck--header-button
+                                          "[↑]" #'pi-deck-header-jump-to-answer
+                                          (if on
+                                              "Jump to the answer when a turn ends: on\nmouse-1: turn off"
+                                            "Jump to the answer when a turn ends: off\nmouse-1: turn on")
+                                          (not on)))
+                                       " "
+                                       (pi-deck--header-button "[⑂]" #'pi-deck-header-fork
                                                                "mouse-1: fork this session (new tab)")
                                        " ")
                              "")

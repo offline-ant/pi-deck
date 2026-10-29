@@ -1089,13 +1089,30 @@ MARK is `bold' (shown in this tab), `elsewhere' (◦) or nil."
             (pi-deck-fork-agent (pi-deck-agent chat))
             (should (member "Fork" (pi-deck-test--menu-labels (pi-deck-agent-menu (pi-deck-agent chat))))))
           (should (equal submitted (list (list chat "/fork-here"))))
+          ;; [↑] toggles jumping to the answer for this session only.
+          (let ((toggle (string-search "[↑]" header)))
+            (should (eq (keymap-lookup (get-text-property toggle 'local-map header)
+                                       "<header-line> <mouse-1>")
+                        #'pi-deck-header-jump-to-answer))
+            (should (memq 'shadow (ensure-list (get-text-property toggle 'face header))))
+            (switch-to-buffer chat)
+            (unwind-protect
+                (progn
+                  (pi-deck-header-jump-to-answer (pi-deck-test--click (selected-window) 1))
+                  (should (local-variable-p 'pilish-jump-to-answer))
+                  (should pilish-jump-to-answer)
+                  (should-not (default-value 'pilish-jump-to-answer))
+                  (let ((header (pi-deck-pane-header)))
+                    (should (eq (get-text-property (string-search "[↑]" header) 'face header)
+                                'header-line-highlight))))
+              (kill-local-variable 'pilish-jump-to-answer)))
           (should (eq (keymap-lookup pi-deck-command-map "f") #'pi-deck-fork))))
       ;; A long name is truncated, never the buttons.
       (let ((long (pi-deck-test--session dir (make-string 80 ?x))))
         (switch-to-buffer long)
         (pi-deck--run-update)
         (let ((header (substring-no-properties (pi-deck-pane-header))))
-          (should (string-match-p "x… *\\[⑂\\] \\[⤢\\] \\[✕\\] \\'" header))
+          (should (string-match-p "x… *\\[↑\\] \\[⑂\\] \\[⤢\\] \\[✕\\] \\'" header))
           (should (<= (string-width (car (split-string header "\\[⤢\\]")))
                       (window-total-width)))))
       ;; Disabling the mode restores the header line.
