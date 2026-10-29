@@ -184,10 +184,10 @@ it.  Saved state lists agents in this order and restores them in it."
   (let ((dialog (car (pi-deck-agent-dialogs agent)))
         (process (pi-deck-agent-process agent)))
     (cond
-     ;; Titles may add context lines after the question.
-     (dialog (format "asks: %s" (car (split-string (or (plist-get dialog :title)
-                                                       (plist-get dialog :method))
-                                                   "\n"))))
+     ;; Titles may add context lines before the question.
+     (dialog (format "asks: %s" (car (last (split-string (or (plist-get dialog :title)
+                                                             (plist-get dialog :method))
+                                                         "\n")))))
      ((and (eq (pi-deck-agent-kind agent) 'shell)
            (buffer-local-value 'pi-deck--shell-exit (pi-deck-agent-buffer agent)))
       (format "exited %s" (buffer-local-value 'pi-deck--shell-exit
