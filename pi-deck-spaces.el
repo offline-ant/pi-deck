@@ -158,18 +158,19 @@ Nil means ghostel's default shell.")
       (plist-get best :name))))
 
 (defun pi-deck-agent-space (agent &optional tab-index seen)
-  "Return AGENT's space name, or nil.
-A displaying tab wins, then an explicit assignment, the parent's space, and
-the closest space directory.  TAB-INDEX caches `pi-deck-tab-index'; SEEN
-guards against parent cycles."
-  (let ((tab-index (or tab-index (pi-deck-tab-index)))
-        (parent (pi-deck-agent (pi-deck-agent-parent agent))))
-    (or (pi-deck--tab-group (car (pi-deck--agent-tab agent tab-index)))
-        (let ((space (pi-deck-agent-assigned-space agent)))
+  "Return AGENT's home space name, or nil.
+That is its explicit assignment, else its parent's space, else the closest
+space directory.  Only an agent none of these place belongs to the space of
+a tab displaying it: showing an agent in another space's tab never moves
+it.  TAB-INDEX caches `pi-deck-tab-index'; SEEN guards against parent
+cycles."
+  (let ((parent (pi-deck-agent (pi-deck-agent-parent agent))))
+    (or (let ((space (pi-deck-agent-assigned-space agent)))
           (and space (member space (pi-deck-space-names)) space))
         (and parent (not (memq parent seen))
              (pi-deck-agent-space parent tab-index (cons agent seen)))
-        (pi-deck--space-for-dir (pi-deck-agent-directory agent)))))
+        (pi-deck--space-for-dir (pi-deck-agent-directory agent))
+        (pi-deck--tab-group (car (pi-deck--agent-tab agent (or tab-index (pi-deck-tab-index))))))))
 
 (defun pi-deck-tab-label (tab _index)
   "Return a label for TAB."

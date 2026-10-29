@@ -37,6 +37,11 @@ references use `declare-function`.
   `pilish-session-pending-dialogs`, `pilish-start-session`). Needed Pilish
   changes belong in the Pilish fork (`../pilish`, branch `pi-orchestration`)
   with tests, not in workarounds here.
+- `pi-deck-agents` returns agents in creation order (`pi-deck-agent-number`);
+  keep it the one stable order (saved state lists agents in it and restore
+  re-tracks them in it). `pi-deck-agent-space` is the fixed home space
+  (assigned, parent, directory, displaying tab only as a last resort); use
+  `pi-deck--agent-tab` when you need where an agent is displayed.
 - Set tab groups with `pi-deck--set-tab-group`; `tab-bar-change-tab-group`'s
   default hook moves tabs.
 - Never write the user's init files; preferences and state live under

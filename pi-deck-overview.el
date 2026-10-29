@@ -85,6 +85,9 @@
 (defvar-local pi-deck-overview--shown nil
   "Agents shown in the selected tab while rendering, in bold in the sidebar.")
 
+(defvar-local pi-deck-overview--shown-elsewhere nil
+  "Agents shown only in other tabs while rendering, marked ◦ in the sidebar.")
+
 (defface pi-deck-current-space '((t :inherit bold :underline t))
   "Face for the current space's name in the sidebar."
   :group 'pi-deck)
@@ -159,6 +162,9 @@ HELP is shown on hover."
               (concat "   " indent (pi-deck-status-icon status) " "
                       (truncate-string-to-width
                        (concat (if (memq agent pi-deck-overview--shown) (propertize name 'face 'bold) name)
+                               (when (memq agent pi-deck-overview--shown-elsewhere)
+                                 (propertize " ◦" 'face 'shadow
+                                             'help-echo "shown in another tab"))
                                (when detail (propertize (concat "  " detail) 'face 'shadow)))
                        (max 4 (- pi-deck-sidebar-width (length indent) 9)) nil nil "…")
                       (pi-deck-overview--right
@@ -241,8 +247,42 @@ menu."
       'pi-deck-space name)
      "mouse-1: switch to this space; mouse-3: menu")))
 
+(defun pi-deck-overview--insert-tab-groups (agents space tab-index)
+  "Insert SPACE's AGENTS grouped by the tab showing them, using TAB-INDEX.
+Groups follow tab order; a tab of another space is labelled with it, and
+agents no tab shows come last.  Workers follow their outermost listed
+ancestor."
+  (let ((groups nil))
+    (dolist (agent agents)
+      (let* ((root (pi-deck-overview--root agent agents))
+             (tab (pi-deck--agent-tab root tab-index))
+             (key (and tab (nth 1 tab)))
+             (cell (assoc key groups)))
+        (if cell (setcdr cell (append (cdr cell) (list agent)))
+          (push (list key agent) groups))))
+    (setq groups (sort groups :key (lambda (group) (or (car group) most-positive-fixnum))))
+    (dolist (group groups)
+      (let* ((entry (and (car group) (nth (1- (car group)) tab-index)))
+             (group-space (and entry (pi-deck--tab-group (car entry)))))
+        (insert (propertize
+                 (cond ((null entry) "  not shown in a tab\n")
+                       ((equal group-space space)
+                        (format "  tab %s\n" (pi-deck-tab-label (car entry) (car group))))
+                       (t (format "  tab %s (in %s)\n" (pi-deck-tab-label (car entry) (car group))
+                                  (or group-space "other"))))
+                 'face 'shadow)))
+      (pi-deck-overview--insert-tree (cdr group)))))
+
+(defun pi-deck-overview--insert-tree (agents)
+  "Insert AGENTS nested under their parents, each with its closed workers."
+  (dolist (item (pi-deck-overview--tree agents))
+    (insert (pi-deck-overview--agent-line (car item) (cdr item) nil))
+    (pi-deck-overview--insert-finished (car item) (1+ (cdr item)))))
+
 (defun pi-deck-overview--insert-spaces (agents tab-index)
-  "Insert AGENTS grouped by space and tab using TAB-INDEX."
+  "Insert AGENTS by home space using TAB-INDEX.
+The sidebar lists each space's agents in their stable creation order; the
+overview groups them by the tab showing them."
   (let* ((names (append (pi-deck-space-names) (list nil)))
          (by-space (mapcar (lambda (name)
                              (cons name (cl-remove-if-not
@@ -260,28 +300,9 @@ menu."
                    space (pi-deck-rollup (mapcar #'pi-deck-agent-status members))
                    (length members)))
           (unless (member (or space "other") pi-deck-overview--collapsed)
-            (let ((groups nil))
-              ;; Group by displaying tab, keeping tab order; hidden agents
-              ;; last.  Workers follow their outermost listed ancestor.
-              (dolist (agent shown)
-                (let* ((root (pi-deck-overview--root agent shown))
-                       (tab (pi-deck--agent-tab root tab-index))
-                       (key (and tab (nth 1 tab)))
-                       (cell (assoc key groups)))
-                  (if cell (setcdr cell (append (cdr cell) (list agent)))
-                    (push (list key agent) groups))))
-              (setq groups (sort groups :key (lambda (group) (or (car group) most-positive-fixnum))))
-              (dolist (group groups)
-                (unless pi-deck-overview--compact
-                  (let ((entry (and (car group) (nth (1- (car group)) tab-index))))
-                    (insert (propertize
-                             (if entry
-                                 (format "  tab %s\n" (pi-deck-tab-label (car entry) (car group)))
-                               "  not shown in a tab\n")
-                             'face 'shadow))))
-                (dolist (item (pi-deck-overview--tree (cdr group)))
-                  (insert (pi-deck-overview--agent-line (car item) (cdr item) nil))
-                  (pi-deck-overview--insert-finished (car item) (1+ (cdr item))))))))))))
+            (if pi-deck-overview--compact
+                (pi-deck-overview--insert-tree shown)
+              (pi-deck-overview--insert-tab-groups shown space tab-index))))))))
 
 (defun pi-deck-overview--insert-priority (agents tab-index)
   "Insert AGENTS by attention priority, then most recent change."
@@ -319,7 +340,11 @@ menu."
          (agents (pi-deck-agents)))
     (setq pi-deck-overview--current-space (pi-deck-current-space)
           pi-deck-overview--shown
-          (pi-deck--agents-shown-by (mapcar #'window-buffer (window-list nil 'no-minibuf))))
+          (pi-deck--agents-shown-by (mapcar #'window-buffer (window-list nil 'no-minibuf)))
+          pi-deck-overview--shown-elsewhere
+          (cl-remove-if (lambda (agent) (or (memq agent pi-deck-overview--shown)
+                                            (not (pi-deck--agent-tab agent tab-index))))
+                        agents))
     (erase-buffer)
     (unless pi-deck-overview--compact
       (insert (propertize "pi-deck" 'face 'bold) "  "

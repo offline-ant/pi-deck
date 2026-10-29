@@ -127,9 +127,10 @@ The tab bar's ⌂ (or `d`) shows it in the hidden overview tab; again returns
 to the previous tab. The header shows the status summary, Emacs version,
 server name, PID, uptime, clients, frames, live Pi sessions, socket,
 orchestration host status, notification method and state file. Agents
-follow, grouped by space (directory and branch), then by the tab showing
-them ("not shown in a tab" last); live orchestration workers and panels nest
-under their parent. The key sheet ends the overview (see below).
+follow, grouped by their home space (directory and branch; see
+[Sidebar](#sidebar)), then by the tab showing them (a tab of another space
+names it; "not shown in a tab" last); live orchestration workers and panels
+nest under their parent. The key sheet ends the overview (see below).
 
 Workers are ephemeral: Pi closes them once they return, and their buffers
 go. Each parent row is followed by a folded "N finished workers" line;
@@ -166,9 +167,20 @@ space tree:
   unfolds), and `+` (menu: new agent, new shell, new tab). The current
   space's name is underlined.
 - Under it the space's agents, workers and panels nested under their parent,
-  each with status, name (bold when the current tab shows it), detail and a
-  ✕ that stops it ([Closing](#closing)). Closed workers fold into "N finished
-  workers" with transcript links.
+  each with status, name (bold when the current tab shows it, a dim `◦`
+  after it when only another tab does), detail and a ✕ that stops it
+  ([Closing](#closing)). Closed workers fold into "N finished workers" with
+  transcript links.
+
+Positions are stable: agents are listed in creation order (new ones at the
+bottom, workers and panels under their parent in creation order), and
+selecting, revealing or moving an agent between tabs never reorders the
+list. The order is saved with the state and restored after a daemon
+restart. An agent's home space is fixed: the space it was started or
+assigned in, else its parent's, else the space whose directory contains it;
+only an agent none of these place belongs to the space of a tab showing
+it. Showing an agent in another space's tab never moves it (the space
+status rollups follow the same rule).
 - `+ New space` creates a space.
 
 Clicking an agent jumps to it: the tab showing it is selected; a worker or

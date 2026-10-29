@@ -253,12 +253,18 @@
         (should (equal (pi-deck-agent-space child) "proj"))
         (pi-deck-test--phase (pi-deck-agent-buffer child) "thinking")
         (should (eq (cdr (assoc "proj" (pi-deck-space-statuses))) 'working))
-        ;; A tab displaying an agent determines its space and status.
+        ;; A tab displaying an agent determines the tab's status, not the
+        ;; agent's home space.
         (switch-to-buffer (pi-deck-agent-buffer child))
         (should (eq (pi-deck-tab-status (tab-bar--current-tab-find)) 'working))
-        (pi-deck-create-space dir "elsewhere")
+        (pi-deck-create-space (make-temp-file "pi-deck-elsewhere-" t) "elsewhere")
         (switch-to-buffer (pi-deck-agent-buffer by-dir))
-        (should (equal (pi-deck-agent-space by-dir) "elsewhere"))))))
+        (should (equal (pi-deck-agent-space by-dir) "proj"))
+        ;; Only an agent nothing else places takes a displaying tab's space.
+        (let ((loose (pi-deck-agent (pi-deck-test--session (make-temp-file "pi-deck-loose-" t) "loose"))))
+          (should-not (pi-deck-agent-space loose))
+          (switch-to-buffer (pi-deck-agent-buffer loose))
+          (should (equal (pi-deck-agent-space loose) "elsewhere")))))))
 
 (ert-deftest pi-deck-test-new-agent-and-shell-in-space ()
   (pi-deck-test--with-deck
@@ -528,6 +534,90 @@
           (should-not (window-parameter nil 'window-side))
           (should (> (length (pi-deck-test--main-windows)) count))
           (should (eq (get-buffer-window pi-deck-sidebar-buffer-name) sidebar))))))))
+
+;; The sidebar lists agents by home space in creation order: showing,
+;; revealing or moving them between tabs never reorders it.
+(defun pi-deck-test--sidebar-rows (sidebar)
+  "Return SIDEBAR's agent rows as (SPACE NAME MARK) in display order.
+MARK is `bold' (shown in this tab), `elsewhere' (◦) or nil."
+  (with-current-buffer (window-buffer sidebar)
+    (pi-deck-overview-refresh)
+    (let (rows space)
+      (goto-char (point-min))
+      (while (not (eobp))
+        (let ((agent (get-text-property (line-beginning-position) 'pi-deck-agent)))
+          (when-let* ((header (get-text-property (line-beginning-position) 'pi-deck-space)))
+            (setq space header))
+          (when agent
+            (let* ((line (buffer-substring (line-beginning-position) (line-end-position)))
+                   (name (pi-deck-agent-name agent))
+                   (start (string-search name line)))
+              (push (list space name
+                          (cond ((eq (get-text-property start 'face line) 'bold) 'bold)
+                                ((string-match-p (concat (regexp-quote name) " ◦") line) 'elsewhere)))
+                    rows))))
+        (forward-line 1))
+      (nreverse rows))))
+
+(ert-deftest pi-deck-test-sidebar-order-is-stable ()
+  (pi-deck-test--with-deck
+    (let ((two (make-temp-file "pi-deck-two-" t)))
+      (pi-deck-create-space dir "space")
+      (pi-deck-create-space two "two")
+      (pi-deck-select-space "space")
+      (let* ((zeta (pi-deck-agent (pi-deck-test--session dir "zeta")))
+             (alpha (pi-deck-agent (pi-deck-test--session dir "alpha")))
+             (mid (pi-deck-agent (pi-deck-test--session dir "mid")))
+             (beta (pi-deck-agent (pi-deck-test--session dir "beta")))
+             (order '(("space" "zeta") ("space" "mid") ("space" "alpha") ("space" "beta"))))
+        (setf (pi-deck-agent-parent mid) (pi-deck-agent-buffer zeta)
+              (pi-deck-agent-target mid) "t-1")
+        (should (equal (pi-deck-agents) (list zeta alpha mid beta)))
+        (pi-deck-sidebar-toggle)
+        (let ((sidebar (lambda () (get-buffer-window pi-deck-sidebar-buffer-name)))
+              (rows (lambda (sidebar) (mapcar (lambda (row) (take 2 row))
+                                              (pi-deck-test--sidebar-rows sidebar)))))
+          ;; Creation order, the worker under its parent; not by name.
+          (should (equal (funcall rows (funcall sidebar)) order))
+          ;; Revealing agents one after another in the same pane keeps it.
+          (dolist (agent (list alpha beta zeta))
+            (pi-deck-reveal agent 'window)
+            (should (equal (funcall rows (funcall sidebar)) order)))
+          ;; zeta in the current tab is bold; shown in another tab, ◦.
+          (should (equal (assoc-default "zeta" (mapcar #'cdr (pi-deck-test--sidebar-rows (funcall sidebar))))
+                         '(bold)))
+          (pi-deck-new-tab "other")
+          (pi-deck--display-agent-in-window beta (pi-deck--pane-window))
+          (pi-deck-select-tab 1)
+          (let ((marks (mapcar #'cdr (pi-deck-test--sidebar-rows (funcall sidebar)))))
+            (should (equal (assoc-default "zeta" marks) '(bold)))
+            (should (equal (assoc-default "beta" marks) '(elsewhere)))
+            (should (equal (assoc-default "alpha" marks) '(nil))))
+          ;; Shown in another space's tab, alpha stays home and in place.
+          (pi-deck-select-space "two")
+          (pi-deck--display-agent-in-window alpha (pi-deck--pane-window))
+          (should (equal (pi-deck-agent-space alpha) "space"))
+          (should (equal (funcall rows (funcall sidebar)) order))
+          (should-not (assoc "two" (pi-deck-space-statuses)))
+          ;; A new agent goes to the bottom.
+          (pi-deck-test--session dir "aardvark")
+          (should (equal (funcall rows (funcall sidebar))
+                         (append order '(("space" "aardvark"))))))))))
+
+(ert-deftest pi-deck-test-agent-order-survives-restore ()
+  (pi-deck-test--with-deck
+    (pi-deck-create-space dir "space")
+    (dolist (name '("b" "a" "c")) (pi-deck-test--session dir name))
+    (let ((state (pi-deck-save-state)))
+      (should (equal (mapcar (lambda (record) (plist-get record :name)) (plist-get state :agents))
+                     '("b" "a" "c"))))
+    (dolist (agent (pi-deck-agents)) (pi-deck-stop-agent agent))
+    (should-not (pi-deck-agents))
+    (cl-letf (((symbol-function 'pilish-start-session)
+               (lambda (directory name &rest _) (pi-deck-test--session directory name))))
+      (pi-deck-restore-state))
+    (pi-deck-test--session dir "0")
+    (should (equal (mapcar #'pi-deck-agent-name (pi-deck-agents)) '("b" "a" "c" "0")))))
 
 (ert-deftest pi-deck-test-sidebar-is-a-space-tree ()
   (pi-deck-test--with-deck

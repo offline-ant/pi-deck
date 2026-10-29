@@ -76,10 +76,14 @@
 
 ;;;; Agents
 
+(defvar pi-deck--agent-count 0
+  "Number of agents tracked so far; the next one gets the next number.")
+
 (cl-defstruct (pi-deck-agent (:constructor pi-deck-agent--make)
                              (:copier nil))
   "A Pi session or terminal tracked by pi-deck."
   buffer            ; chat buffer (pi) or terminal buffer (shell); identity
+  (number (cl-incf pi-deck--agent-count)) ; creation order, see `pi-deck-agents'
   kind              ; `pi' or `shell'
   (state 'unknown)  ; base state: idle, working, blocked, unknown
   (seen t)          ; nil after finishing work unobserved
@@ -104,12 +108,14 @@
     (if (and (eq state 'idle) (not (pi-deck-agent-seen agent))) 'done state)))
 
 (defun pi-deck-agents ()
-  "Return all live agents, sorted by buffer name."
+  "Return all live agents in creation order, oldest first.
+The order is stable: showing, selecting or renaming an agent never moves
+it.  Saved state lists agents in this order and restores them in it."
   (let (agents)
     (maphash (lambda (buffer agent)
                (when (buffer-live-p buffer) (push agent agents)))
              pi-deck--agents)
-    (sort agents :key (lambda (agent) (buffer-name (pi-deck-agent-buffer agent))))))
+    (sort agents :key #'pi-deck-agent-number)))
 
 (defun pi-deck-agent (buffer)
   "Return the agent tracked for BUFFER, or nil."
