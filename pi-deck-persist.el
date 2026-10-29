@@ -258,11 +258,9 @@ A lone unused initial tab is replaced."
                       (cl-position-if-not #'pi-deck-root-tab-p initial)))
            (lone (and lone (null (pi-deck--tab-group (nth lone initial)))
                       (eq (car (nth lone initial)) 'current-tab)
-                      ;; A single window besides the sidebar.
+                      ;; A single window besides side windows (the sidebar).
                       (= 1 (cl-count-if-not
-                            (lambda (window)
-                              (equal (buffer-name (window-buffer window))
-                                     pi-deck-sidebar-buffer-name))
+                            (lambda (window) (window-parameter window 'window-side))
                             (window-list nil 'no-minibuf)))
                       (1+ lone)))
            (existing (delq nil (mapcar #'pi-deck--tab-group initial)))
