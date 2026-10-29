@@ -60,6 +60,13 @@ tell the buttons apart with `event-basic-type'."
   :type '(repeat function)
   :group 'pi-deck)
 
+(defcustom pi-deck-tab-name-max-width 30
+  "Maximum display width of a tab name in the tab bar.
+Longer names end in \"…\"; names also shrink when the space's tabs would
+not fit the frame, so every tab keeps its ✕ visible."
+  :type 'natnum
+  :group 'pi-deck)
+
 (defcustom pi-deck-tab-numbers nil
   "Whether tabs show their number within the space (as `SPC d 1…9' selects)."
   :type 'boolean
@@ -128,11 +135,12 @@ tell the buttons apart with `event-basic-type'."
   (propertize " ✕" 'close-tab t :help "Close tab; stops what only it shows")
   "Close button after tab names; `close-tab' makes tab-bar treat it as one.")
 
-(defun pi-deck--format-tab-name (tab number)
-  "Return TAB's tab bar label as NUMBER-th tab of its space."
+(defun pi-deck--format-tab-name (tab number width)
+  "Return TAB's tab bar label as NUMBER-th tab of its space.
+The name is truncated to WIDTH columns so the close button stays visible."
   (let ((name (concat " " (pi-deck--icon-prefix (pi-deck-tab-status tab))
                       (if pi-deck-tab-numbers (format "%d " number) "")
-                      (alist-get 'name tab)
+                      (truncate-string-to-width (alist-get 'name tab) width nil nil "…")
                       pi-deck--tab-close-button " ")))
     (tab-bar-tab-name-format-mouse-face
      (tab-bar-tab-name-format-face name tab number) tab number)))
@@ -149,12 +157,32 @@ space."
                                :reverse t))))
         (and recent (pi-deck--tab-group recent))))))
 
+(defun pi-deck--tab-name-width (count fixed)
+  "Return the name width that fits COUNT tabs beside FIXED other columns.
+Each tab also takes its separator, icon, number and ✕; the right-aligned
+status cell and extra items are included in the room they leave."
+  (let* ((right (apply #'+ (mapcar (lambda (item) (string-width (nth 2 item)))
+                                   (append (pi-deck-tab-bar-format-status)
+                                           (pi-deck-tab-bar-format-extra)))))
+         (overhead (+ 1 (string-width (concat "  " pi-deck--tab-close-button))
+                      (if pi-deck-tab-bar-icons 2 0)
+                      (if pi-deck-tab-numbers 2 0)))
+         (room (- (frame-width) fixed right 1)))
+    (max 4 (min pi-deck-tab-name-max-width
+                (if (> count 0) (- (/ room count) overhead) pi-deck-tab-name-max-width)))))
+
 (defun pi-deck-tab-bar-format-space ()
   "Produce the overview button, the space button and the space's tabs."
   (let* ((tabs (funcall tab-bar-tabs-function))
          (root (pi-deck-root-tab-p (tab-bar--current-tab-find tabs)))
          (space (pi-deck--tab-bar-space tabs))
          (status (and space (cdr (assoc space (pi-deck-space-statuses)))))
+         (space-tabs (cl-count-if (lambda (tab) (and (not (pi-deck-root-tab-p tab))
+                                                     (equal (pi-deck--tab-group tab) space)))
+                                  tabs))
+         (space-label (concat " " (pi-deck--icon-prefix status) (or space "no space") " ▾ "))
+         ;; ⌂, the space button, + and their separators.
+         (width (pi-deck--tab-name-width space-tabs (+ 3 1 (string-width space-label) 1 3)))
          (index 0) (number 0) items)
     (push `(pi-deck-home menu-item
                          ,(pi-deck--tab-bar-button " ⌂ " (if root 'tab-bar-tab 'tab-bar-tab-inactive))
@@ -162,9 +190,7 @@ space."
           items)
     (push `(pi-deck-sep-home menu-item ,(tab-bar-separator) ignore) items)
     (push `(pi-deck-space menu-item
-                          ,(pi-deck--tab-bar-button
-                            (concat " " (pi-deck--icon-prefix status) (or space "no space") " ▾ ")
-                            'tab-bar-tab-group-current)
+                          ,(pi-deck--tab-bar-button space-label 'tab-bar-tab-group-current)
                           pi-deck-spaces-menu
                           :help "mouse-1: switch space; mouse-3: this space's menu")
           items)
@@ -175,7 +201,7 @@ space."
         (let ((current (eq (car tab) 'current-tab)))
           (push `(,(intern (format "sep-%d" index)) menu-item ,(tab-bar-separator) ignore) items)
           (push `(,(if current 'current-tab (intern (format "tab-%d" index)))
-                  menu-item ,(pi-deck--format-tab-name tab number)
+                  menu-item ,(pi-deck--format-tab-name tab number width)
                   ,(if current 'ignore (alist-get 'binding tab))
                   :help ,(format "mouse-1: select; mouse-2 or ✕: close; mouse-3: menu"))
                 items))))

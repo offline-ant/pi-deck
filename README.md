@@ -204,10 +204,13 @@ Everything works by mouse in graphical and text frames (the config enables
   *New space…* and *Overview*, then the tabs (status icon, name, ✕), `+`
   (new agent, new shell or empty tab) and the status summary (click: next
   agent needing attention, else the overview). Click a tab to select it,
-  drag to move it, ✕ or `mouse-2` to close it.
+  drag to move it, ✕ or `mouse-2` to close it. Names longer than
+  `pi-deck-tab-name-max-width` (30), or too long for the space's tabs to fit
+  the frame, end in `…`, so every ✕ stays visible.
 - **Pane title bars** (header lines of chats and terminals; Pilish's input
   windows keep their own header): status, name, model and context use (Pi)
-  or exit status (terminals); `[⤢]` zooms, `[✕]` closes the pane.
+  or exit status (terminals), truncated with `…` to keep the buttons visible;
+  `[⤢]` zooms, `[✕]` closes the pane.
 - **Sidebar and overview**: see [Sidebar](#sidebar); click a space header's
   arrow to fold.
 - **Right-click menus** (`mouse-3`): agent rows (Jump, Show beside, Zoom,

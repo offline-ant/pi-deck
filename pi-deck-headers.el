@@ -69,6 +69,12 @@
                       (list (pi-deck-agent-model agent) (pi-deck--context-percent agent)))
                     (list (pi-deck-agent-detail agent)))))
 
+(defun pi-deck--header-fit (title reserved)
+  "Truncate TITLE to leave RESERVED columns of the header line's window.
+The header line is formatted with its window selected, so the buttons
+after TITLE stay visible however long the name and details are."
+  (truncate-string-to-width title (max 4 (- (window-total-width) reserved 1)) nil nil "…"))
+
 (defun pi-deck-pane-header ()
   "Return the title bar of the current buffer's agent pane, or nil."
   (when-let* ((agent (and (bound-and-true-p pi-deck-mode) (pi-deck-agent (current-buffer)))))
@@ -80,10 +86,12 @@
                            " ")))
       (string-replace
        "%" "%%"
-       (concat " " (pi-deck-status-icon (pi-deck-agent-status agent)) " "
-               (propertize (pi-deck-agent-name agent) 'face 'bold)
-               (mapconcat (lambda (detail) (propertize (concat " · " detail) 'face 'shadow))
-                          (pi-deck--header-details agent) "")
+       (concat (pi-deck--header-fit
+                (concat " " (pi-deck-status-icon (pi-deck-agent-status agent)) " "
+                        (propertize (pi-deck-agent-name agent) 'face 'bold)
+                        (mapconcat (lambda (detail) (propertize (concat " · " detail) 'face 'shadow))
+                                   (pi-deck--header-details agent) ""))
+                (string-width buttons))
                (propertize " " 'display `(space :align-to (- right ,(string-width buttons))))
                buttons
                ;; Pilish's own header line, if any, follows on the same line.

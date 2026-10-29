@@ -579,6 +579,29 @@
            unless (string-match-p "sep" (symbol-name (car item)))
            collect (list (car item) (substring-no-properties (nth 2 item)) (nth 3 item))))
 
+;; Long names shrink with "…" so every tab keeps its ✕ in the frame.
+(ert-deftest pi-deck-test-tab-bar-names-fit ()
+  (pi-deck-test--with-deck
+    (pi-deck-create-space dir "space")
+    (let* ((long (make-string 60 ?n))
+           (chat (pi-deck-test--session dir long)))
+      (switch-to-buffer chat)
+      (pi-deck-new-tab nil)
+      (let ((pi-deck-tab-name-max-width 30))
+        (dolist (width '(160 60))
+          (set-frame-size nil width 30)
+          (let* ((labels (mapcar (lambda (item) (nth 1 item))
+                                 (cl-remove-if-not (lambda (item) (string-match-p "\\`\\(current-tab\\|tab-[0-9]+\\)\\'" (symbol-name (car item))))
+                                                   (pi-deck-test--tab-bar-items))))
+                 (total (apply #'+ (mapcar (lambda (item) (string-width (nth 2 item)))
+                                           (tab-bar-format-list tab-bar-format)))))
+            (should (= (length labels) 2))
+            (should (cl-some (lambda (label) (string-match-p "n… ✕ \\'" label)) labels))
+            (dolist (label labels)
+              (should (string-match-p "✕ \\'" label))
+              (should (<= (string-width label) 36)))
+            (should (<= total width))))))))
+
 (ert-deftest pi-deck-test-tab-bar-shows-the-current-space ()
   (pi-deck-test--with-deck
     (let ((two (make-temp-file "pi-deck-two-" t)))
@@ -893,6 +916,14 @@
             (should (eq (keymap-lookup (get-text-property close 'local-map header)
                                        "<header-line> <mouse-1>")
                         #'pi-deck-header-close)))))
+      ;; A long name is truncated, never the buttons.
+      (let ((long (pi-deck-test--session dir (make-string 80 ?x))))
+        (switch-to-buffer long)
+        (pi-deck--run-update)
+        (let ((header (substring-no-properties (pi-deck-pane-header))))
+          (should (string-match-p "x… *\\[⤢\\] \\[✕\\] \\'" header))
+          (should (<= (string-width (car (split-string header "\\[⤢\\]")))
+                      (window-total-width)))))
       ;; Disabling the mode restores the header line.
       (pi-deck-mode -1)
       (should-not (buffer-local-value 'header-line-format chat))
