@@ -217,7 +217,7 @@ Everything works by mouse in graphical and text frames (the config enables
   `[↓]` jumps a Pi chat to its latest output and follows it again (as `G`),
   `[⑂]` forks a Pi session (`/fork-here`: the fork is listed in the same
   space, named `<session>-fork`; the draft is untouched, a busy agent keeps
-  working), `[⤢]` zooms, `[✕]` hides the pane.
+  working and its fork ends at the latest finished step), `[⤢]` zooms, `[✕]` hides the pane.
   `pi-deck-pane-header-prefix-function` can put something first, e.g. the
   window number.
 - **Right-click menus** (`mouse-3`): agent rows (Jump, Show beside, Show
