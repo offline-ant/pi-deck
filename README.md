@@ -200,9 +200,11 @@ Everything works by mouse in graphical and text frames (the config enables
 - **Pane title bars** (header lines of chats and terminals; Pilish's input
   windows keep their own header): status, name, model and context use (Pi)
   or exit status (terminals), truncated with `…` to keep the buttons visible;
-  `[↑]` toggles, for that session only, whether its chat jumps to the start
-  of the final answer when a turn ends (`pilish-jump-to-answer`; dimmed when
-  off, the default follows that option),
+  `[↑]` toggles, for that session only, whether its chat shows each final
+  answer from the start, once: when the turn ends if the chat follows the
+  output, else when you open or focus it, moving forward only from above
+  the answer (`pilish-jump-to-answer`; dimmed when off, the default follows
+  that option),
   `[↓]` jumps a Pi chat to its latest output and follows it again (as `G`),
   `[⑂]` forks a Pi session (`/fork-here`: the fork is listed in the same
   space, named `<session>-fork`; the draft is untouched, a busy agent keeps

@@ -11,8 +11,8 @@
 ;;
 ;; status icon, name, then the model and context use for Pi agents or the
 ;; exit status for terminals; [↑] toggles whether the session's chat jumps
-;; to the start of the final answer when a turn ends
-;; (`pilish-toggle-jump-to-answer'; dimmed when off), [↓] jumps a Pi chat
+;; to the start of each final answer, once, at turn end or on opening or
+;; focusing it (`pilish-toggle-jump-to-answer'; dimmed when off), [↓] jumps a Pi chat
 ;; to its latest output and follows it (like `G'), [⑂] forks a Pi session
 ;; (`pi-deck-fork-agent'), [⤢] zooms the pane and [✕] hides it; the agent
 ;; keeps running (see `pi-deck-hide-pane').  The segment is put in front of
@@ -118,8 +118,8 @@ after TITLE stay visible however long the name and details are."
                                          (pi-deck--header-button
                                           "[↑]" #'pi-deck-header-jump-to-answer
                                           (if on
-                                              "Jump to the answer when a turn ends: on\nmouse-1: turn off"
-                                            "Jump to the answer when a turn ends: off\nmouse-1: turn on")
+                                              "Jump to the final answer once: on\nmouse-1: turn off"
+                                            "Jump to the final answer once: off\nmouse-1: turn on")
                                           (not on)))
                                        " "
                                        (pi-deck--header-button "[↓]" #'pi-deck-header-latest
