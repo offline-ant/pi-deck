@@ -15,7 +15,7 @@ pi (3) ◐                +  │ …chat…
  ◐ main                 ✕  │ …input…
    ◐ review             ✕  │ ○ tests (exit 0)                             [⤢] [✕]
    ○ tests              ✕  │ …terminal…
-   ▸ 2 finished workers    │
+   ▸ 2 finished workers ✕  │
 swarmy (2) ●            +  │
                            │
 + New space                │
@@ -101,7 +101,12 @@ sets it everywhere and saves it.
   sessions" links. Its right-click menu also has **Resume**, which reopens
   the session as a normal editable Pi session in a new pane of the parent's
   space (or jumps to it when already open). A resumed session is
-  independent: nothing it does returns to the parent.
+  independent: nothing it does returns to the parent. The row's ✕ clears
+  the list; the session files stay on disk.
+- Terminals whose process ended, panels or your own, fold into one
+  "N finished shells" row at the end of their space. Unfold it to read or
+  close one. The row's ✕ closes them all, which loses their output, and
+  agents can then no longer read those panels.
 - `+ New space` ends the list.
 
 Positions are stable: agents are listed in creation order (new ones at the

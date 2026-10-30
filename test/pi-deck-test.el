@@ -1517,6 +1517,94 @@ MARK is `shown' (highlighted: the frame shows it) or nil."
         (kill-buffer parent))
       (should-not pi-deck--finished-workers))))
 
+(ert-deftest pi-deck-test-clear-finished-workers ()
+  (pi-deck-test--with-large-frame
+   (let ((dir (make-temp-file "pi-deck-test-" t)))
+     (pi-deck-test--with-deck
+      (pi-deck-create-space dir "space")
+      (let* ((parent (pi-deck-test--session dir "parent"))
+             (other (pi-deck-test--session dir "other"))
+             (record (pi-deck-test--finished-worker dir parent "do-1"))
+             (other-record (pi-deck-test--finished-worker dir other "do-2")))
+        (pi-deck-test--finished-worker dir parent "do-3")
+        (pi-deck-sidebar-toggle)
+        (let* ((sidebar (get-buffer-window pi-deck-sidebar-buffer-name))
+               (buffer (window-buffer sidebar))
+               (clear (lambda (chat)
+                        (with-current-buffer buffer
+                          (let ((row (text-property-any (point-min) (point-max)
+                                                        'pi-deck-finished chat)))
+                            (next-single-property-change row 'pi-deck-button))))))
+          (with-current-buffer buffer
+            (pi-deck-sidebar-refresh)
+            (goto-char (text-property-any (point-min) (point-max) 'pi-deck-finished parent))
+            (pi-deck-sidebar-toggle-fold)
+            (should (string-match-p "✓ do-1" (buffer-string))))
+          ;; The ✕ clears only its parent's list, without opening anything.
+          (should (eq (get-text-property (funcall clear parent) 'pi-deck-button buffer)
+                      'clear-workers))
+          (should (string-match-p "^ *▾ 2 finished workers +✕$"
+                                  (with-current-buffer buffer (buffer-string))))
+          (let ((window (selected-window)))
+            (pi-deck-sidebar-mouse-1 (pi-deck-test--click sidebar (funcall clear parent)))
+            (should (eq (selected-window) window)))
+          (should-not (pi-deck-finished-workers parent))
+          (should (equal (pi-deck-finished-workers other) (list other-record)))
+          (with-current-buffer buffer
+            (should-not (string-match-p "do-1\\|2 finished" (buffer-string)))
+            (should (string-match-p "1 finished worker" (buffer-string)))
+            (should-not pi-deck-sidebar--expanded-workers))
+          (should (file-readable-p (plist-get record :session-file)))
+          ;; The next worker of the parent starts folded again.
+          (pi-deck-test--finished-worker dir parent "do-4")
+          (with-current-buffer buffer
+            (pi-deck-sidebar-refresh)
+            (should (string-match-p "▸ 1 finished worker" (buffer-string))))))))))
+
+(ert-deftest pi-deck-test-finished-shells ()
+  (pi-deck-test--with-large-frame
+   (let ((dir (make-temp-file "pi-deck-test-" t)))
+     (pi-deck-test--with-deck
+      (pi-deck-create-space dir "space")
+      (let* ((one (pi-deck-start-shell dir "shell:one" '("/bin/sh" "-c" "true")))
+             (two (pi-deck-start-shell dir "shell:two" '("/bin/sh" "-c" "true")))
+             (live (pi-deck-start-shell dir "shell:live" '("/bin/sh" "-c" "read a"))))
+        (should (pi-deck-test--wait
+                 (lambda () (pi-deck-refresh)
+                   (not (or (get-buffer-process one) (get-buffer-process two))))))
+        (pi-deck-sidebar-toggle)
+        (let* ((sidebar (get-buffer-window pi-deck-sidebar-buffer-name))
+               (buffer (window-buffer sidebar))
+               (text (lambda ()
+                       (with-current-buffer buffer
+                         (pi-deck-sidebar-refresh)
+                         (buffer-substring-no-properties (point-min) (point-max))))))
+          ;; Ended shells fold into one row at the end of their space; the
+          ;; live one stays a row of its own.
+          (should (string-match-p "^ . shell:live.*\n ▸ 2 finished shells +✕\n\n\\+ New space"
+                                  (funcall text)))
+          (should-not (string-match-p "exited" (funcall text)))
+          (with-current-buffer buffer
+            (goto-char (text-property-not-all (point-min) (point-max)
+                                              'pi-deck-finished-shells nil))
+            (pi-deck-sidebar-jump))
+          (should (string-match-p "▾ 2 finished shells" (funcall text)))
+          (should (= 2 (with-current-buffer buffer
+                         (how-many "exited 0" (point-min) (point-max)))))
+          ;; A shown shell keeps its row's ✕ and jump.
+          (with-current-buffer buffer
+            (should (text-property-any (point-min) (point-max)
+                                       'pi-deck-agent (pi-deck-agent one))))
+          ;; The ✕ closes the ended shells only and leaves the list folded.
+          (let ((clear (with-current-buffer buffer
+                         (text-property-any (point-min) (point-max)
+                                            'pi-deck-button 'close-shells))))
+            (pi-deck-sidebar-mouse-1 (pi-deck-test--click sidebar clear)))
+          (should-not (or (buffer-live-p one) (buffer-live-p two)))
+          (should (buffer-live-p live))
+          (should-not (string-match-p "finished shell" (funcall text)))
+          (should-not (buffer-local-value 'pi-deck-sidebar--expanded-shells buffer))))))))
+
 ;;;; Persistence and daemon
 
 (ert-deftest pi-deck-test-save-and-restore-state ()

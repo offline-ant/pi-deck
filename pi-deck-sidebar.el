@@ -8,9 +8,10 @@
 ;; it, showing a space tree: each space as a header (name, count that
 ;; folds it, status, `+' menu) with its agents, workers and panels nested
 ;; under their parent, each with a ✕ that stops it, folded "N finished workers" with
-;; transcript links, and a final "+ New space" row.  Rows of agents the
-;; selected frame shows are highlighted.  Its header line holds the status
-;; summary (click: next agent needing attention) and the buttons of
+;; transcript links and a ✕ that clears them, each space's folded "N finished
+;; shells" with a ✕ that closes them, and a final "+ New space" row.  Rows of
+;; agents the selected frame shows are highlighted.  Its header line holds the
+;; status summary (click: next agent needing attention) and the buttons of
 ;; `pi-deck-sidebar-header-items'.
 ;;
 ;; It is mouse-driven: mouse-1 acts (jump, visit a space or show the
@@ -93,6 +94,9 @@ to a command reading (interactive \"e\")."
 
 (defvar-local pi-deck-sidebar--expanded-workers nil
   "Parent agent buffers whose closed workers are listed.")
+
+(defvar-local pi-deck-sidebar--expanded-shells nil
+  "Space labels whose finished shells are listed.")
 
 (defvar-local pi-deck-sidebar--current-space nil
   "Space of the selected frame while rendering, underlined.")
@@ -184,6 +188,16 @@ HELP is shown on hover."
      (propertize line 'pi-deck-agent agent)
      "mouse-1: jump to this agent; double-click: show only it; mouse-2: show it beside; mouse-3: menu")))
 
+(defun pi-deck-sidebar--finished-row (indent expanded label button)
+  "Return a foldable row of finished things reading LABEL, ending in BUTTON.
+INDENT is its leading space and EXPANDED says whether its list shows."
+  (concat indent (if expanded "▾ " "▸ ")
+          (propertize (truncate-string-to-width
+                       label (max 4 (- pi-deck-sidebar-width (length indent) 6)) nil nil "…")
+                      'face 'shadow)
+          (pi-deck-sidebar--right button)
+          "\n"))
+
 (defun pi-deck-sidebar--insert-finished (agent depth)
   "Insert AGENT's closed workers at tree DEPTH: a count, or the list."
   (when-let* ((buffer (pi-deck-agent-buffer agent))
@@ -192,11 +206,11 @@ HELP is shown on hover."
           (expanded (memq buffer pi-deck-sidebar--expanded-workers)))
       (insert (pi-deck-sidebar--clickable
                (propertize
-                (concat indent (if expanded "▾ " "▸ ")
-                        (propertize (format "%d finished worker%s" (length records)
-                                            (if (cdr records) "s" ""))
-                                    'face 'shadow)
-                        "\n")
+                (pi-deck-sidebar--finished-row
+                 indent expanded
+                 (format "%d finished worker%s" (length records) (if (cdr records) "s" ""))
+                 (pi-deck-sidebar--button
+                  "✕" 'clear-workers "mouse-1: clear this list; session files stay on disk"))
                 'pi-deck-finished buffer)
                "mouse-1: show or hide closed workers"))
       (when expanded
@@ -209,6 +223,23 @@ HELP is shown on hover."
                             "\n")
                     'pi-deck-worker-record record)
                    "mouse-1: read this worker's session; mouse-3: menu")))))))
+
+(defun pi-deck-sidebar--insert-finished-shells (label agents)
+  "Insert the ended terminals AGENTS of the space LABEL: a count, or the list."
+  (when agents
+    (let ((expanded (member label pi-deck-sidebar--expanded-shells)))
+      (insert (pi-deck-sidebar--clickable
+               (propertize
+                (pi-deck-sidebar--finished-row
+                 " " expanded
+                 (format "%d finished shell%s" (length agents) (if (cdr agents) "s" ""))
+                 (pi-deck-sidebar--button
+                  "✕" 'close-shells "mouse-1: close these shells; their output goes"))
+                'pi-deck-finished-shells (cons label agents))
+               "mouse-1: show or hide finished shells"))
+      (when expanded
+        (dolist (agent agents)
+          (insert (pi-deck-sidebar--agent-line agent 1)))))))
 
 (defun pi-deck-sidebar--space-header (space status count)
   "Return the header row for SPACE with rolled-up STATUS and agent COUNT.
@@ -234,8 +265,8 @@ space's menu."
 (defun pi-deck-sidebar--insert-spaces (agents tab-index)
   "Insert AGENTS by home space (TAB-INDEX caches `pi-deck-tab-index').
 Each space lists its agents in their stable creation order, workers and
-panels under their parent; agents without a space come last, under
-\"other\"."
+panels under their parent, and folds its finished shells into one row;
+agents without a space come last, under \"other\"."
   (dolist (space (append (pi-deck-space-names) (list nil)))
     (let ((members (cl-remove-if-not
                     (lambda (agent) (equal (pi-deck-agent-space agent tab-index) space))
@@ -245,9 +276,12 @@ panels under their parent; agents without a space come last, under
                  space (pi-deck-rollup (mapcar #'pi-deck-agent-status members))
                  (length members)))
         (unless (member (or space "other") pi-deck-sidebar--collapsed)
-          (dolist (item (pi-deck-sidebar--tree members))
+          (dolist (item (pi-deck-sidebar--tree
+                         (seq-remove #'pi-deck-agent-finished-shell-p members)))
             (insert (pi-deck-sidebar--agent-line (car item) (cdr item)))
-            (pi-deck-sidebar--insert-finished (car item) (1+ (cdr item)))))))))
+            (pi-deck-sidebar--insert-finished (car item) (1+ (cdr item))))
+          (pi-deck-sidebar--insert-finished-shells
+           (or space "other") (seq-filter #'pi-deck-agent-finished-shell-p members)))))))
 
 (defun pi-deck-summary-string (&optional summary short)
   "Return a status summary like \"◉ 2 blocked · ● 1 done\" for SUMMARY.
@@ -344,7 +378,7 @@ The unfolded current space shows its directory beside the current pane."
 
 (defun pi-deck-sidebar-jump ()
   "Act on this line: run its action, visit its space, open its closed
-worker, show its closed workers, or jump to its agent."
+worker, show its closed workers or finished shells, or jump to its agent."
   (interactive)
   (let ((position (line-beginning-position)))
     (cond
@@ -354,8 +388,22 @@ worker, show its closed workers, or jump to its agent."
       (pi-deck-open-finished-worker (get-text-property position 'pi-deck-worker-record)))
      ((get-text-property position 'pi-deck-space)
       (pi-deck-sidebar-visit-space (get-text-property position 'pi-deck-space)))
-     ((get-text-property position 'pi-deck-finished) (pi-deck-sidebar-toggle-fold))
+     ((or (get-text-property position 'pi-deck-finished)
+          (get-text-property position 'pi-deck-finished-shells))
+      (pi-deck-sidebar-toggle-fold))
      (t (pi-deck-jump (pi-deck-sidebar--agent-at-point))))))
+
+(defun pi-deck-sidebar--clear-workers (parent)
+  "Clear the closed workers listed under PARENT's buffer."
+  (setq pi-deck-sidebar--expanded-workers (delq parent pi-deck-sidebar--expanded-workers))
+  (pi-deck-clear-finished-workers parent)
+  (pi-deck-sidebar--render))
+
+(defun pi-deck-sidebar--close-shells (label agents)
+  "Close the finished shells AGENTS listed under the space LABEL."
+  (setq pi-deck-sidebar--expanded-shells (delete label pi-deck-sidebar--expanded-shells))
+  (pi-deck-stop-agents agents)
+  (pi-deck-sidebar--render))
 
 (defun pi-deck-sidebar-mouse-1 (event)
   "Act on what EVENT clicked: a ✕, + or fold button, else the line.
@@ -371,6 +419,10 @@ Buttons leave the selected window alone; lines act like \\[pi-deck-sidebar-jump]
                    (goto-char position)
                    (pi-deck-sidebar-toggle-fold)))
           ('stop (pi-deck-stop (get-text-property row 'pi-deck-agent) event))
+          ('clear-workers (pi-deck-sidebar--clear-workers
+                           (get-text-property row 'pi-deck-finished)))
+          ('close-shells (let ((shells (get-text-property row 'pi-deck-finished-shells)))
+                           (pi-deck-sidebar--close-shells (car shells) (cdr shells))))
           ('space-menu (pi-deck-popup (pi-deck-space-menu (get-text-property row 'pi-deck-space))
                                       event))
           (_ (mouse-set-point event)
@@ -409,19 +461,29 @@ The first click already jumped to it; buttons ignore double clicks."
     (when menu (pi-deck-popup menu event))))
 
 (defun pi-deck-sidebar-toggle-fold ()
-  "Fold the space at point, or show or hide the closed workers at point."
+  "Fold the space at point, or show or hide the finished things at point."
   (interactive)
-  (if-let* ((parent (get-text-property (line-beginning-position) 'pi-deck-finished)))
+  (let* ((row (line-beginning-position))
+         (parent (get-text-property row 'pi-deck-finished))
+         (shells (get-text-property row 'pi-deck-finished-shells)))
+    (cond
+     (parent
       (setq pi-deck-sidebar--expanded-workers
             (if (memq parent pi-deck-sidebar--expanded-workers)
                 (delq parent pi-deck-sidebar--expanded-workers)
-              (cons parent pi-deck-sidebar--expanded-workers)))
-    (let ((space (or (get-text-property (line-beginning-position) 'pi-deck-space)
-                     (user-error "No space on this line"))))
-      (setq pi-deck-sidebar--collapsed
-            (if (member space pi-deck-sidebar--collapsed)
-                (delete space pi-deck-sidebar--collapsed)
-              (cons space pi-deck-sidebar--collapsed)))))
+              (cons parent pi-deck-sidebar--expanded-workers))))
+     (shells
+      (setq pi-deck-sidebar--expanded-shells
+            (if (member (car shells) pi-deck-sidebar--expanded-shells)
+                (delete (car shells) pi-deck-sidebar--expanded-shells)
+              (cons (car shells) pi-deck-sidebar--expanded-shells))))
+     (t
+      (let ((space (or (get-text-property row 'pi-deck-space)
+                       (user-error "No space on this line"))))
+        (setq pi-deck-sidebar--collapsed
+              (if (member space pi-deck-sidebar--collapsed)
+                  (delete space pi-deck-sidebar--collapsed)
+                (cons space pi-deck-sidebar--collapsed)))))))
   (pi-deck-sidebar--render))
 
 (defun pi-deck-sidebar-show ()

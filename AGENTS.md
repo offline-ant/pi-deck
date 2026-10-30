@@ -109,6 +109,10 @@ references use `declare-function`.
   (`pi-deck--waiting-status-key`, `pi-deck--waiting-status-prefix`); it changes
   when a new run starts. Waiting is `blocked`, so attention, notifications and
   sounds need nothing of their own.
+- A terminal whose process ended stays an agent (panels keep their buffers for
+  `panel-read`); the sidebar only folds it into its space's finished shells row
+  (`pi-deck-agent-finished-shell-p`), whose ✕ stops those agents. Finished workers
+  are records of buffers already gone, so their ✕ only forgets the records.
 - Resuming a closed worker (`pi-deck-resume-finished-worker`) starts an ordinary
   session on its file: no orchestration target, no result to the parent.
 - `*.elc` files are build output (`make compile`), not tracked; the config

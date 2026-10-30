@@ -211,6 +211,12 @@ it.  Saved state lists agents in this order and restores them in it."
       (format "exited %s" (process-exit-status process)))
      ((not process) "no process"))))
 
+(defun pi-deck-agent-finished-shell-p (agent)
+  "Return non-nil when AGENT is a terminal whose process ended."
+  (and (eq (pi-deck-agent-kind agent) 'shell)
+       (let ((process (pi-deck-agent-process agent)))
+         (not (and (processp process) (process-live-p process))))))
+
 (defun pi-deck-agent-windows-buffers (agent)
   "Return the buffers whose display counts as showing AGENT."
   (let ((buffer (pi-deck-agent-buffer agent)))

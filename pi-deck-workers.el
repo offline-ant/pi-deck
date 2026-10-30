@@ -130,17 +130,21 @@ buffer's own closed workers are dropped with it."
         (with-demoted-errors "pi-deck: %S" (pi-deck--remember-worker agent)))
       (remhash buffer pi-deck--agents)
       (pi-deck--schedule-update))
-    (when (cl-find buffer pi-deck--finished-workers
-                   :key (lambda (record) (plist-get record :parent)))
-      (setq pi-deck--finished-workers
-            (cl-remove buffer pi-deck--finished-workers
-                       :key (lambda (record) (plist-get record :parent))))
-      (pi-deck--schedule-update))))
+    (pi-deck-clear-finished-workers buffer)))
 
 (defun pi-deck-finished-workers (parent)
   "Return the closed workers remembered for PARENT's buffer, newest first."
   (cl-remove-if-not (lambda (record) (eq (plist-get record :parent) parent))
                     pi-deck--finished-workers))
+
+(defun pi-deck-clear-finished-workers (parent)
+  "Forget the closed workers remembered for PARENT's buffer.
+Their session files stay on disk."
+  (when (pi-deck-finished-workers parent)
+    (setq pi-deck--finished-workers
+          (cl-remove parent pi-deck--finished-workers
+                     :key (lambda (record) (plist-get record :parent))))
+    (pi-deck--schedule-update)))
 
 (defun pi-deck-open-finished-worker (record)
   "Open closed worker RECORD's session in Pilish's read-only view."
