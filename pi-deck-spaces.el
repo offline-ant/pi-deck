@@ -441,6 +441,20 @@ buffer, even when a side window such as the sidebar is selected."
   (with-selected-window window
     (split-window (pi-deck--pane-of window) nil direction)))
 
+(defun pi-deck-show-space-directory (space)
+  "Select SPACE's directory in Dired, in a new pane beside the current one.
+A window showing it already is just selected."
+  (when-let* ((dir (pi-deck-space-dir space))
+              ((file-directory-p dir)))
+    (let ((buffer (dired-noselect dir)))
+      (select-window
+       (or (get-buffer-window buffer)
+           (let* ((pane (pi-deck--pane-window))
+                  (window (pilish-dissolve-window-pair
+                           (pi-deck--split-pane pane (pi-deck--beside-direction pane)))))
+             (set-window-buffer window buffer)
+             window))))))
+
 (defun pi-deck--input-or-chat-window (agent)
   "Return the window to focus for AGENT: its input when shown, else its buffer."
   (let ((buffer (pi-deck-agent-buffer agent)))

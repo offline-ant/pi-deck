@@ -85,8 +85,9 @@ sets it everywhere and saves it.
   agent needing attention. Buttons from `pi-deck-sidebar-header-items`
   follow at the right (see [Options](#options)).
 - Each **space** is a header: name (switches to the space and unfolds it;
-  the current space is underlined), agent count (folds; `TAB` too),
-  rolled-up status, and `+` (menu: new agent, new shell).
+  on the current space, which is underlined, opens its directory in Dired
+  beside the current pane), agent count (folds; `TAB` too), rolled-up
+  status, and `+` (menu: new agent, new shell).
 - Under it the space's **agents**, with workers, forks and panels nested
   under their parent, each with status, name, detail and a ✕ that stops it
   (see [Hiding and stopping](#hiding-and-stopping)). Rows of agents the
@@ -116,7 +117,7 @@ on the most recently used pane.
 
 | Key | Action |
 |---|---|
-| `RET` | jump to agent (answers a pending dialog) / switch to the space at point / show closed workers / read a closed worker |
+| `RET` | jump to agent (answers a pending dialog) / switch to the space at point (its directory when current) / show closed workers / read a closed worker |
 | `o` | show agent beside the current pane, stay in the sidebar |
 | `TAB` | fold or unfold the space or closed workers at point |
 | `n` `p` / `j` `k` | next / previous agent |

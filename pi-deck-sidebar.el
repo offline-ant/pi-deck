@@ -13,7 +13,8 @@
 ;; summary (click: next agent needing attention) and the buttons of
 ;; `pi-deck-sidebar-header-items'.
 ;;
-;; It is mouse-driven: mouse-1 acts (jump, visit a space, fold, stop),
+;; It is mouse-driven: mouse-1 acts (jump, visit a space or show the
+;; current space's directory, fold, stop),
 ;; mouse-2 shows an agent beside the current pane, a double click shows it
 ;; alone, mouse-3 opens the row's context menu.
 ;;
@@ -332,11 +333,14 @@ The summary leaves out status names when they would not fit."
       (user-error "No agent on this line")))
 
 (defun pi-deck-sidebar-visit-space (space)
-  "Unfold SPACE and show its layout."
-  (setq pi-deck-sidebar--collapsed (delete space pi-deck-sidebar--collapsed))
-  (if (pi-deck-space space)
-      (pi-deck-select-space space)
-    (pi-deck-sidebar--render)))
+  "Unfold SPACE and show its layout.
+The unfolded current space shows its directory beside the current pane."
+  (let ((folded (member space pi-deck-sidebar--collapsed)))
+    (setq pi-deck-sidebar--collapsed (delete space pi-deck-sidebar--collapsed))
+    (cond ((not (pi-deck-space space)) (pi-deck-sidebar--render))
+          ((not (equal space (pi-deck-current-space))) (pi-deck-select-space space))
+          (folded (pi-deck-sidebar--render))
+          (t (pi-deck-show-space-directory space)))))
 
 (defun pi-deck-sidebar-jump ()
   "Act on this line: run its action, visit its space, open its closed

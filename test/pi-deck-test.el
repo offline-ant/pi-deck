@@ -840,6 +840,47 @@ MARK is `shown' (highlighted: the frame shows it) or nil."
     (pi-deck-test--session dir "0")
     (should (equal (mapcar #'pi-deck-agent-name (pi-deck-agents)) '("b" "a" "c" "0")))))
 
+(ert-deftest pi-deck-test-clicking-current-space-shows-its-directory ()
+  (pi-deck-test--with-large-frame
+   (pi-deck-test--with-deck
+    (let ((two (make-temp-file "pi-deck-two-" t)))
+      (pi-deck-create-space two "two")
+      (pi-deck-create-space dir "space")
+      (let ((chat (pi-deck-test--session dir "a")))
+        (pi-deck--display-agent-in-window (pi-deck-agent chat) (pi-deck--pane-window))
+        (pi-deck-sidebar-toggle)
+        (let* ((sidebar (get-buffer-window pi-deck-sidebar-buffer-name))
+               (name (lambda (space)
+                       (with-current-buffer (window-buffer sidebar)
+                         (pi-deck-sidebar-refresh)
+                         (pi-deck-test--position 'pi-deck-space space)))))
+          (select-window sidebar)
+          ;; Folded, the first click only unfolds.
+          (with-current-buffer (window-buffer sidebar)
+            (push "space" pi-deck-sidebar--collapsed))
+          (pi-deck-sidebar-mouse-1 (pi-deck-test--click sidebar (funcall name "space")))
+          (should-not (member "space" (buffer-local-value 'pi-deck-sidebar--collapsed
+                                                          (window-buffer sidebar))))
+          (should (get-buffer-window chat))
+          (should-not (pi-deck-test--in-dired-p))
+          ;; The directory opens beside the chat and gets the focus.
+          (pi-deck-sidebar-mouse-1 (pi-deck-test--click sidebar (funcall name "space")))
+          (should (get-buffer-window chat))
+          (should (pi-deck-test--in-dired-p))
+          (should (equal default-directory (file-name-as-directory dir)))
+          ;; Again, it is only selected.
+          (let ((count (length (pi-deck-test--main-windows)))
+                (dired (selected-window)))
+            (select-window (get-buffer-window chat))
+            (pi-deck-sidebar-mouse-1 (pi-deck-test--click sidebar (funcall name "space")))
+            (should (= (length (pi-deck-test--main-windows)) count))
+            (should (eq (selected-window) dired)))
+          ;; Another space's name still just switches.
+          (pi-deck-sidebar-mouse-1 (pi-deck-test--click sidebar (funcall name "two")))
+          (should (equal (pi-deck-current-space) "two"))
+          (should (= (length (pi-deck-test--main-windows)) 1))))
+      (delete-directory two t)))))
+
 (ert-deftest pi-deck-test-sidebar-is-a-space-tree ()
   (pi-deck-test--with-deck
     (let ((two (make-temp-file "pi-deck-two-" t)))
