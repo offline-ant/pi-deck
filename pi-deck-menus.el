@@ -128,7 +128,8 @@ a busy agent keeps working."
   "Return the context menu of the closed worker RECORD."
   (pi-deck--menu
    (plist-get record :name)
-   (list (list "Open transcript" (lambda () (pi-deck-open-finished-worker record))))))
+   (list (list "Open transcript" (lambda () (pi-deck-open-finished-worker record)))
+         (list "Resume" (lambda () (pi-deck-resume-finished-worker record))))))
 
 (provide 'pi-deck-menus)
 ;;; pi-deck-menus.el ends here

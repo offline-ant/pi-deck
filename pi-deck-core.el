@@ -55,6 +55,12 @@
 (defconst pi-deck-statuses '(blocked done working idle unknown)
   "Attention statuses, most urgent first.")
 
+(defconst pi-deck--waiting-status-key "worker-frame"
+  "Key of the extension status that tells a worker waits for the user.")
+
+(defconst pi-deck--waiting-status-prefix "worker:waiting"
+  "Start of that status's text while an interrupted worker waits for the user.")
+
 (defun pi-deck-status-priority (status)
   "Return the attention priority of STATUS; higher is more urgent."
   (pcase status ('blocked 4) ('done 3) ('working 2) ('idle 1) (_ 0)))
@@ -179,8 +185,14 @@ it.  Saved state lists agents in this order and restores them in it."
   (when (eq (pi-deck-agent-kind agent) 'pi)
     (pilish-session-pending-dialogs (pi-deck-agent-buffer agent))))
 
+(defun pi-deck--waiting-p (buffer)
+  "Return non-nil when the Pilish chat BUFFER is a worker waiting for the user."
+  (when-let* ((status (pilish-session-extension-status
+                       buffer pi-deck--waiting-status-key)))
+    (string-prefix-p pi-deck--waiting-status-prefix status)))
+
 (defun pi-deck-agent-detail (agent)
-  "Return a one-line detail for AGENT: dialog title, exit status, or nil."
+  "Return a one-line detail for AGENT: dialog title, waiting, exit status, or nil."
   (let ((dialog (car (pi-deck-agent-dialogs agent)))
         (process (pi-deck-agent-process agent)))
     (cond
@@ -188,6 +200,9 @@ it.  Saved state lists agents in this order and restores them in it."
      (dialog (format "asks: %s" (car (last (split-string (or (plist-get dialog :title)
                                                              (plist-get dialog :method))
                                                          "\n")))))
+     ((and (eq (pi-deck-agent-kind agent) 'pi)
+           (pi-deck--waiting-p (pi-deck-agent-buffer agent)))
+      "waiting for you")
      ((and (eq (pi-deck-agent-kind agent) 'shell)
            (buffer-local-value 'pi-deck--shell-exit (pi-deck-agent-buffer agent)))
       (format "exited %s" (buffer-local-value 'pi-deck--shell-exit
@@ -242,7 +257,7 @@ it now."
   (let ((process (pilish-session-process buffer)))
     (cond
      ((not (and (processp process) (process-live-p process))) 'unknown)
-     ((pilish-session-pending-dialogs buffer) 'blocked)
+     ((or (pilish-session-pending-dialogs buffer) (pi-deck--waiting-p buffer)) 'blocked)
      ((pilish-session-busy-p buffer) 'working)
      (t 'idle))))
 
@@ -392,6 +407,11 @@ Leaving work (working or blocked to idle) while invisible makes it done."
 (defun pi-deck--on-dialog (chat-buffer _request _state)
   "Refresh CHAT-BUFFER's agent after an extension dialog opened or closed."
   (when (buffer-live-p chat-buffer)
+    (pi-deck-refresh-agent chat-buffer)))
+
+(defun pi-deck--on-extension-status (chat-buffer key _text)
+  "Refresh CHAT-BUFFER's agent after its waiting status KEY changed."
+  (when (and (equal key pi-deck--waiting-status-key) (buffer-live-p chat-buffer))
     (pi-deck-refresh-agent chat-buffer)))
 
 (defun pi-deck--main-window (&optional frame)

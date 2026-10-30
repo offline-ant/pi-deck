@@ -101,6 +101,30 @@
       (push-button (point)))
     (pi-deck-smoke--wait "answered dialog" (lambda () (null (pi-deck-agent-dialogs agent))))
     (pi-deck-smoke--wait "idle after dialog" (lambda () (eq (pi-deck-agent-state agent) 'idle)))
+    ;; A worker's real extension UI: blocked, a widget and a lasting notice.
+    (pilish-submit-prompt chat "/deck-wait" #'ignore)
+    (pi-deck-smoke--wait "waiting agent" (lambda () (eq (pi-deck-agent-status agent) 'blocked)))
+    (unless (equal (pi-deck-agent-detail agent) "waiting for you")
+      (error "Unexpected detail %S" (pi-deck-agent-detail agent)))
+    (let ((input (pilish-session-input-buffer chat)))
+      (pi-deck-smoke--wait
+       "widget" (lambda ()
+                  (cl-some (lambda (overlay)
+                             (equal (substring-no-properties
+                                     (or (overlay-get overlay 'before-string) ""))
+                                    "Worker interrupted\nType a message to continue\n"))
+                           (with-current-buffer input
+                             (overlays-in (point-min) (point-max))))))
+      (pi-deck-smoke--wait "lasting notice"
+                           (lambda () (string-match-p "⚠ Worker interrupted"
+                                                      (pi-deck-smoke--chat-text chat))))
+      (pilish-submit-prompt chat "/deck-continue" #'ignore)
+      (pi-deck-smoke--wait "wait ended" (lambda () (eq (pi-deck-agent-state agent) 'idle)))
+      (pi-deck-smoke--wait
+       "widget cleared" (lambda ()
+                          (cl-notany (lambda (overlay) (overlay-get overlay 'before-string))
+                                     (with-current-buffer input
+                                       (overlays-in (point-min) (point-max)))))))
     (pi-deck-save-state)
     (format "PASS1 %s" (plist-get (buffer-local-value 'pilish--state chat) :session-file))))
 
@@ -166,7 +190,26 @@ Panel names end in SUFFIX: Pi's panel names are global to the machine."
         (pi-deck-smoke--submit chat (concat "close panel " aside))
         (pi-deck-smoke--wait "hidden panel closed"
                              (lambda () (null (pi-deck-smoke--panel-buffer aside)))))
-      (pi-deck-smoke--wait "turn end" (lambda () (eq (pi-deck-agent-state agent) 'idle))))
+      (pi-deck-smoke--wait "turn end" (lambda () (eq (pi-deck-agent-state agent) 'idle)))
+      ;; A real finished worker resumes as an ordinary session of the space.
+      (pi-deck-smoke--submit chat "run worker")
+      (pi-deck-smoke--wait "finished worker" (lambda () (pi-deck-finished-workers chat)))
+      (pi-deck-smoke--wait "turn end" (lambda () (eq (pi-deck-agent-state agent) 'idle)))
+      (let* ((record (car (pi-deck-finished-workers chat)))
+             (resumed (pi-deck-resume-finished-worker record)))
+        (pi-deck-smoke--wait
+         "resumed session"
+         (lambda () (and (equal (pi-deck-agent-state resumed) 'idle)
+                         (equal (pi-deck-agent-session-file resumed)
+                                (plist-get record :session-file)))))
+        (when (pi-deck-agent-worker-p resumed) (error "The resumed session is a worker"))
+        (unless (equal (pi-deck-agent-space resumed) "smoke")
+          (error "The resumed session is not in its parent's space"))
+        (unless (eq (pi-deck-resume-finished-worker record) resumed)
+          (error "A second resume started another session"))
+        (pi-deck-stop resumed)
+        (pi-deck-smoke--wait "resumed session stopped"
+                             (lambda () (not (buffer-live-p (pi-deck-agent-buffer resumed)))))))
     "PASS-PANELS"))
 
 (defvar pi-deck-smoke-panels-result nil

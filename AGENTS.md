@@ -8,9 +8,9 @@ for Pi sessions via Pilish. User documentation: `README.md`.
 | File | Purpose |
 |---|---|
 | `pi-deck.el` | `pi-deck-mode` (hides the tab bar), `pi-deck-command-map`, hooks and timers |
-| `pi-deck-core.el` | agent registry, state derivation, seen/done, priority, terminal prompt marks |
+| `pi-deck-core.el` | agent registry, state derivation (including workers waiting for the user), seen/done, priority, terminal prompt marks |
 | `pi-deck-spaces.el` | space registry, hidden per-space layout tabs and remembered layouts (`pi-deck--layouts`, `pi-deck--last-space`), agent locations, space/pane commands, reveal |
-| `pi-deck-workers.el` | orchestration panels beside their parent, forks assigned to the parent's space, closed-worker records and read-only views |
+| `pi-deck-workers.el` | orchestration panels beside their parent, forks assigned to the parent's space, closed-worker records, read-only views and resuming them as independent sessions |
 | `pi-deck-close.el` | hiding panes, stopping agents (with descendants) and closing spaces, confirmation (popup dialog from the mouse), view removal across frames and layouts |
 | `pi-deck-headers.el` | pane title bars (header lines with optional prefix, status, model/context or exit, `[↑]` `[↓]` `[⑂]` (Pi) `[⤢]` `[✕]`) |
 | `pi-deck-sidebar.el` | sidebar space tree (clickable rows and buttons), its header line (status summary, `pi-deck-sidebar-header-items`), shared width and narrow-frame hiding, preferences file |
@@ -32,7 +32,8 @@ references use `declare-function`.
 
 - Pilish integration goes through public APIs and hooks
   (`pilish-activity-phase-functions`, `pilish-extension-dialog-functions`,
-  `pilish-session-pending-dialogs`, `pilish-start-session`). Needed Pilish
+  `pilish-extension-status-functions`, `pilish-session-pending-dialogs`,
+  `pilish-session-extension-status`, `pilish-start-session`). Needed Pilish
   changes belong in the Pilish fork (`../pilish`, branch `pi-orchestration`)
   with tests, not in workarounds here.
 - `pi-deck-agents` returns agents in creation order (`pi-deck-agent-number`);
@@ -103,6 +104,13 @@ references use `declare-function`.
   `pi-deck-test--with-deck`; disposable daemons never own the user's file.
 - Orchestration targets are identified by `pi-orchestration-targets`
   (`:kind`), not by terminal major mode.
+- A worker waiting for the user is read only from pi-ant's `worker-frame`
+  extension status starting with `worker:waiting`
+  (`pi-deck--waiting-status-key`, `pi-deck--waiting-status-prefix`); it changes
+  when a new run starts. Waiting is `blocked`, so attention, notifications and
+  sounds need nothing of their own.
+- Resuming a closed worker (`pi-deck-resume-finished-worker`) starts an ordinary
+  session on its file: no orchestration target, no result to the parent.
 - `*.elc` files are build output (`make compile`), not tracked; the config
   loads this checkout with `load-prefer-newer`, so stale ones never shadow
   sources.

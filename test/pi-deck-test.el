@@ -1239,7 +1239,7 @@ MARK is `shown' (highlighted: the frame shows it) or nil."
                      '("New agent" "New shell" "--" "Rename…" "Close space")))
       (should (equal (pi-deck-test--menu-labels
                       (pi-deck-finished-worker-menu '(:name "do-1" :session-file "/tmp/x")))
-                     '("Open transcript")))
+                     '("Open transcript" "Resume")))
       ;; Renaming a terminal renames its buffer.
       (let ((shell (pi-deck-new-shell)))
         (pi-deck-rename-agent shell "logs")
@@ -1351,6 +1351,132 @@ MARK is `shown' (highlighted: the frame shows it) or nil."
               (should (one-window-p))
               (should (pi-deck-test--in-dired-p))))
         (maphash (lambda (id _) (pi-orchestration--close id t)) pi-orchestration--targets)))))
+
+(defun pi-deck-test--waiting (chat text)
+  "Set the worker status of CHAT to TEXT as Pi's RPC does."
+  (with-current-buffer chat
+    (pilish--extension-ui-set-status
+     (list :statusKey "worker-frame" :statusText text))))
+
+(ert-deftest pi-deck-test-waiting-worker-needs-attention ()
+  "An interrupted worker is blocked until a new run changes its status."
+  (pi-deck-test--with-deck
+    (pi-deck-create-space dir "space")
+    (let* ((parent (pi-deck-test--session dir "root"))
+           (worker (pi-deck-test--session dir "do-1"))
+           (agent (pi-deck-agent worker))
+           (pilish-extension-status-functions
+            (list #'pi-deck--on-extension-status)))
+      (setf (pi-deck-agent-parent agent) parent
+            (pi-deck-agent-target agent) "t-1")
+      (should (eq (pi-deck-agent-state agent) 'idle))
+      (pi-deck-test--waiting worker "worker:auto")
+      (should (eq (pi-deck-agent-state agent) 'idle))
+      (should-not (pi-deck-agent-detail agent))
+      (let ((pi-deck-agent-change-functions (list #'pi-deck-notify-transition)))
+        (pi-deck-test--waiting worker "worker:waiting · interrupted"))
+      (should (eq (pi-deck-agent-status agent) 'blocked))
+      (should (equal (pi-deck-agent-detail agent) "waiting for you"))
+      (should (equal (car (car pi-deck-test--notifications)) "do-1 needs attention"))
+      (should (equal (cadr (car pi-deck-test--notifications)) "waiting for you"))
+      (should (memq agent (pi-deck--attention-agents)))
+      (with-current-buffer (pi-deck-sidebar-buffer)
+        (pi-deck-sidebar-refresh)
+        (should (string-match-p "◉ do-1" (buffer-string))))
+      ;; Other extensions' statuses are not read as waiting.
+      (with-current-buffer worker
+        (pilish--extension-ui-set-status
+         '(:statusKey "other" :statusText "worker:waiting")))
+      ;; A new run sets another status.
+      (pi-deck-test--waiting worker "worker:auto")
+      (should (eq (pi-deck-agent-state agent) 'idle))
+      (with-current-buffer worker
+        (pilish--extension-ui-set-status
+         '(:statusKey "other" :statusText "worker:waiting")))
+      (should (eq (pi-deck-agent-state agent) 'idle)))))
+
+(ert-deftest pi-deck-test-mode-listens-to-extension-status ()
+  (should (member '(pilish-extension-status-functions . pi-deck--on-extension-status)
+                  pi-deck--hooks)))
+
+(ert-deftest pi-deck-test-dialog-detail-beats-waiting ()
+  "A question names itself even when the worker also waits."
+  (pi-deck-test--with-deck
+    (let* ((worker (pi-deck-test--session dir "do-1"))
+           (agent (pi-deck-agent worker)))
+      (pi-deck-test--waiting worker "worker:waiting")
+      (cl-letf (((symbol-function 'message) #'ignore))
+        (with-current-buffer worker
+          (pilish--handle-extension-ui-request
+           '(:type "extension_ui_request" :id "q" :method "input" :title "Name"))))
+      (should (equal (pi-deck-agent-detail agent) "asks: Name")))))
+
+(defun pi-deck-test--finished-worker (dir parent name)
+  "Close a fake worker NAME of PARENT in DIR; return its finished record."
+  (let* ((worker (pi-deck-test--session dir name))
+         (file (expand-file-name (format "%s.jsonl" name) dir)))
+    (with-temp-file file
+      (insert "{\"type\":\"session\",\"version\":3,\"id\":\"s-1\",\"cwd\":\"/tmp\"}\n"))
+    (setf (pi-deck-agent-parent (pi-deck-agent worker)) parent
+          (pi-deck-agent-target (pi-deck-agent worker)) "t-1")
+    (let ((pilish-quit-without-confirmation t))
+      (delete-process (pilish-session-process worker))
+      (kill-buffer (pilish-session-input-buffer worker))
+      (kill-buffer worker))
+    (car (pi-deck-finished-workers parent))))
+
+(ert-deftest pi-deck-test-resume-finished-worker ()
+  "Resume opens the session in a new pane of the parent's space, once."
+  (pi-deck-test--with-deck
+    (pi-deck-create-space dir "space")
+    (let* ((parent (pi-deck-test--session dir "root"))
+           (record (pi-deck-test--finished-worker dir parent "do-1"))
+           (file (plist-get record :session-file))
+           (other (make-temp-file "pi-deck-other-" t))
+           started)
+      (should (equal (plist-get record :directory) (file-name-as-directory dir)))
+      (setf (pi-deck-agent-assigned-space (pi-deck-agent parent)) "space")
+      (pi-deck--display-agent-in-window (pi-deck-agent parent) (selected-window))
+      (pi-deck-create-space other "elsewhere")
+      (should (equal (pi-deck-current-space) "elsewhere"))
+      (cl-letf (((symbol-function 'pilish-start-session)
+                 (lambda (directory name &rest options)
+                   (push (list directory name options) started)
+                   (let ((chat (pi-deck-test--session directory name)))
+                     (with-current-buffer chat
+                       (setq pilish--state
+                             (plist-put pilish--state :session-file
+                                        (plist-get options :session-file))))
+                     chat))))
+        (let ((agent (pi-deck-resume-finished-worker record)))
+          (should (equal started (list (list (file-name-as-directory dir) "1"
+                                             (list :session-file file)))))
+          (should (equal (pi-deck-agent-space agent) "space"))
+          (should (equal (pi-deck-current-space) "space"))
+          (should-not (pi-deck-agent-worker-p agent))
+          (should (pi-deck--input-or-chat-window agent))
+          ;; The parent stays on screen beside it.
+          (should (pi-deck--input-or-chat-window (pi-deck-agent parent)))
+          ;; A second resume jumps instead of starting a second session.
+          (pi-deck-select-space "elsewhere")
+          (should (eq (pi-deck-resume-finished-worker record) agent))
+          (should (equal (pi-deck-current-space) "space"))
+          (should (= (length started) 1)))))))
+
+(ert-deftest pi-deck-test-resume-needs-the-session-and-directory ()
+  (pi-deck-test--with-deck
+    (cl-letf (((symbol-function 'pilish-start-session)
+               (lambda (&rest _) (ert-fail "Started a session"))))
+      (should-error (pi-deck-resume-finished-worker
+                     (list :name "do-1" :session-file (expand-file-name "gone.jsonl" dir)
+                           :directory dir))
+                    :type 'user-error)
+      (let ((file (expand-file-name "there.jsonl" dir)))
+        (write-region "" nil file)
+        (should-error (pi-deck-resume-finished-worker
+                       (list :name "do-1" :session-file file
+                             :directory (expand-file-name "gone" dir)))
+                      :type 'user-error)))))
 
 (ert-deftest pi-deck-test-closed-workers-are-hidden-and-readable ()
   (pi-deck-test--with-deck

@@ -14,7 +14,8 @@
 ;;
 ;; Workers are ephemeral: the host kills their buffers when they finish.
 ;; Their session files remain, so each closed worker is remembered under its
-;; parent and can be read in Pilish's read-only saved-conversation view.
+;; parent.  It can be read in Pilish's read-only saved-conversation view, or
+;; resumed as an independent session whose results stay with you.
 
 ;;; Code:
 
@@ -25,6 +26,7 @@
 (declare-function pi-deck--client-frames "pi-deck-daemon" ())
 (declare-function pi-deck--remove-views "pi-deck-close" (buffers))
 (declare-function pilish-view-session-file "pilish" (file))
+(declare-function pilish-start-session "pilish" (directory name &rest options))
 
 (defcustom pi-deck-show-panels t
   "Whether terminals (panels) started by an agent are shown at once.
@@ -40,8 +42,8 @@ that pane is on screen; otherwise it is only listed in the sidebar."
 
 (defvar pi-deck--finished-workers nil
   "Closed orchestration Pi workers, newest first.
-Plists with :name, :parent (the parent agent's buffer), :session-file and
-:time.")
+Plists with :name, :parent (the parent agent's buffer), :session-file,
+:directory and :time.")
 
 ;;;; Panels
 
@@ -108,7 +110,8 @@ their parent's space; they and workers are only listed in the sidebar."
         (parent (pi-deck-agent-parent agent)))
     (when (and (stringp file) (file-readable-p file) (buffer-live-p parent))
       (push (list :name (pi-deck-agent-name agent) :parent parent
-                  :session-file file :time (float-time))
+                  :session-file file :directory (pi-deck-agent-directory agent)
+                  :time (float-time))
             pi-deck--finished-workers)
       (setq pi-deck--finished-workers
             (seq-take pi-deck--finished-workers pi-deck-finished-workers-limit)))))
@@ -147,6 +150,41 @@ buffer's own closed workers are dropped with it."
     ;; Side windows cannot be split for the view.
     (pi-deck--select-ordinary-window)
     (pilish-view-session-file file)))
+
+(defun pi-deck--session-agent (file)
+  "Return the live Pi agent that has session FILE open, or nil."
+  (let ((file (file-truename file)))
+    (cl-find-if (lambda (agent)
+                  (when-let* ((open (pi-deck-agent-session-file agent)))
+                    (equal (file-truename open) file)))
+                (pi-deck-agents))))
+
+(defun pi-deck-resume-finished-worker (record)
+  "Reopen closed worker RECORD's session as an ordinary editable Pi session.
+It starts in the worker's directory and its parent's space, in a new pane.
+The session is independent: nothing it does returns to the parent.  When
+the session is already open, jump to it instead.  Return its agent."
+  (let ((file (plist-get record :session-file))
+        (dir (plist-get record :directory)))
+    (unless (and (stringp file) (file-readable-p file)
+                 (stringp dir) (file-directory-p dir))
+      (user-error "Session of %s is unavailable" (plist-get record :name)))
+    (let ((open (pi-deck--session-agent file)))
+      (if open
+          (pi-deck-reveal open)
+        (let* ((parent (pi-deck-agent (plist-get record :parent)))
+               (space (or (and parent (pi-deck-agent-space parent))
+                          (pi-deck-current-space)))
+               (chat (pilish-start-session dir (pi-deck--unique-session-name dir)
+                                           :session-file file))
+               (agent (pi-deck--track chat 'pi)))
+          (setf (pi-deck-agent-assigned-space agent) space)
+          (when (and space (not (equal space (pi-deck-current-space))))
+            (pi-deck-select-space space))
+          (pi-deck--display-agent-in-window agent (pi-deck--new-pane-window))
+          (select-window (pi-deck--input-or-chat-window agent))
+          (setq open agent)))
+      open)))
 
 (provide 'pi-deck-workers)
 ;;; pi-deck-workers.el ends here

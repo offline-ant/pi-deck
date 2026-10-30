@@ -116,6 +116,7 @@ that switch spaces and then split) need them now."
 (defconst pi-deck--hooks
   '((pilish-activity-phase-functions . pi-deck--on-activity)
     (pilish-extension-dialog-functions . pi-deck--on-dialog)
+    (pilish-extension-status-functions . pi-deck--on-extension-status)
     (pi-orchestration-target-functions . pi-deck--on-target)
     (pi-deck-agent-change-functions . pi-deck-notify-transition)
     (pi-deck-agent-change-functions . pi-deck--save-on-agent-change)

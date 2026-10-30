@@ -98,7 +98,10 @@ sets it everywhere and saves it.
   unfold it and click (or `RET` on) a worker to read its saved session in
   Pilish's read-only view. Parent chats link the same views: worker tool
   results carry `details.savedConversations`, shown by Pilish as "Pi
-  sessions" links.
+  sessions" links. Its right-click menu also has **Resume**, which reopens
+  the session as a normal editable Pi session in a new pane of the parent's
+  space (or jumps to it when already open). A resumed session is
+  independent: nothing it does returns to the parent.
 - `+ New space` ends the list.
 
 Positions are stable: agents are listed in creation order (new ones at the
@@ -137,7 +140,7 @@ Each agent has a base state and a *seen* flag:
 
 | Icon | Status | Meaning |
 |---|---|---|
-| ◉ | blocked | a Pi extension dialog (confirm, select, input, editor; e.g. the `ask` tool) awaits you |
+| ◉ | blocked | a Pi extension dialog (confirm, select, input, editor; e.g. the `ask` tool) awaits you, or an interrupted worker is waiting for you (detail "waiting for you") |
 | ● | done | finished work (working/blocked → idle) while not visible; cleared once shown |
 | ◐ | working | Pilish reports activity (sending, thinking, replying, running tools, compacting); for terminals, a command runs |
 | ○ | idle | waiting for input; for terminals, at the prompt or exited |
@@ -215,7 +218,7 @@ Everything works by mouse in graphical and text frames (the config enables
 - **Right-click menus** (`mouse-3`): agent rows (Jump, Show beside, Show
   alone, Rename…, Answer question when one waits; for Pi agents Fork, Stop
   turn while busy, Compact while idle, Copy session file; Stop), closed
-  workers (Open transcript), space headers and their `+` (New agent, New
+  workers (Open transcript, Resume), space headers and their `+` (New agent, New
   shell, Rename…, Close space).
 
 ## Hiding and stopping

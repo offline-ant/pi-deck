@@ -43,4 +43,20 @@ export default function piDeckFaux(pi: ExtensionAPI): void {
       ctx.ui.notify(`deck-confirmed:${confirmed}`, "info");
     },
   });
+  // The extension UI an interrupted worker sends, over real RPC.
+  pi.registerCommand("deck-wait", {
+    description: "Act as a worker waiting for the user (pi-deck smoke test)",
+    handler: async (_args, ctx) => {
+      ctx.ui.setStatus("worker-frame", ctx.ui.theme.fg("warning", "worker:waiting"));
+      ctx.ui.setWidget("worker-frame", ["Worker interrupted", "Type a message to continue"]);
+      ctx.ui.notify("Worker interrupted", "warning");
+    },
+  });
+  pi.registerCommand("deck-continue", {
+    description: "End a worker's wait (pi-deck smoke test)",
+    handler: async (_args, ctx) => {
+      ctx.ui.setStatus("worker-frame", "worker:auto");
+      ctx.ui.setWidget("worker-frame", undefined);
+    },
+  });
 }
