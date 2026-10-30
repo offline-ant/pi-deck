@@ -602,11 +602,18 @@
                      (if (eq window* window) 1 (window-pixel-width window*)))))
           (pi-deck--on-window-size-change (selected-frame))))
       (should (= pi-deck-sidebar-width 36))
+      ;; The dragged width is saved.
+      (let ((pi-deck-sidebar-width 0))
+        (pi-deck-load-preferences)
+        (should (= pi-deck-sidebar-width 36)))
       ;; Every space's sidebar gets the new width.
       (pi-deck-switch-space "space")
       (should (= (window-total-width (funcall sidebar)) 36))
-      ;; Frames narrower than twice the width hide it; it comes back.
-      (set-frame-size nil 70 50)
+      ;; Frames without room for panes beside it hide it; it comes back.
+      (set-frame-size nil (+ 36 pi-deck-sidebar-min-pane-width) 50)
+      (pi-deck--sidebar-sync)
+      (should (funcall sidebar))
+      (set-frame-size nil (+ 35 pi-deck-sidebar-min-pane-width) 50)
       (pi-deck--sidebar-sync)
       (should-not (funcall sidebar))
       (should pi-deck-sidebar)
@@ -619,6 +626,7 @@
 
 (ert-deftest pi-deck-test-sidebar-header-summary-and-items ()
   (pi-deck-test--with-deck
+    (setq pi-deck-sidebar-width 36)
     (pi-deck-create-space dir "space")
     (pi-deck-sidebar-toggle)
     (let* ((sidebar (get-buffer-window pi-deck-sidebar-buffer-name))
@@ -852,11 +860,11 @@ MARK is `shown' (highlighted: the frame shows it) or nil."
           (with-current-buffer (window-buffer sidebar)
             (pi-deck-sidebar-refresh)
             (let ((text (buffer-substring-no-properties (point-min) (point-max))))
-              (should (string-match-p "\\` ▾ ○ two (0) \\+\n" text))
-              (should (string-match-p "▾ ○ space (2) \\+\n   ○ a ✕\n     ○ p ✕\n" text))
-              (should (string-match-p "\n \\+ New space\n\\'" text))))
+              (should (string-match-p "\\`two (0) ○ \\+\n" text))
+              (should (string-match-p "^space (2) ○ \\+\n ○ a ✕\n   ○ p ✕\n" text))
+              (should (string-match-p "\n\\+ New space\n\\'" text))))
           ;; The current space's name is highlighted.
-          (should (eq (get-text-property (+ 5 (funcall at 'pi-deck-space "space")) 'face
+          (should (eq (get-text-property (funcall at 'pi-deck-space "space") 'face
                                          (window-buffer sidebar))
                       'pi-deck-current-space))
           (cl-letf (((symbol-function 'pi-deck-popup) (lambda (menu &rest _) (setq popped menu)))
@@ -868,9 +876,12 @@ MARK is `shown' (highlighted: the frame shows it) or nil."
             (pi-deck-sidebar-mouse-1
              (pi-deck-test--click sidebar (funcall button (funcall at 'pi-deck-space "two") 'space-menu)))
             (should (keymapp popped))
-            ;; The arrow folds; the name visits the space and unfolds it.
-            (pi-deck-sidebar-mouse-1
-             (pi-deck-test--click sidebar (funcall button (funcall at 'pi-deck-space "space") 'fold)))
+            ;; The count folds and says so on hover; the name visits the
+            ;; space and unfolds it.
+            (let ((count (funcall button (funcall at 'pi-deck-space "space") 'fold)))
+              (should (equal (get-text-property count 'help-echo (window-buffer sidebar))
+                             "mouse-1: fold or unfold"))
+              (pi-deck-sidebar-mouse-1 (pi-deck-test--click sidebar count)))
             (should (member "space" (buffer-local-value 'pi-deck-sidebar--collapsed (window-buffer sidebar))))
             (pi-deck-sidebar-mouse-1 (pi-deck-test--click sidebar (funcall at 'pi-deck-space "two")))
             (should (equal (pi-deck-current-space) "two"))
@@ -1251,7 +1262,7 @@ MARK is `shown' (highlighted: the frame shows it) or nil."
               (should-not (pi-deck--agent-record panel (pi-deck-tab-index)))
               (with-current-buffer (pi-deck-sidebar-buffer)
                 (pi-deck-sidebar-refresh)
-                (should (string-match-p "○ root .*\n     [^ \n]+ build "
+                (should (string-match-p "○ root .*\n   [^ \n]+ build "
                                         (buffer-substring-no-properties (point-min) (point-max)))))))
         (pi-orchestration--close "panel-1")))))
 

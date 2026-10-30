@@ -11,14 +11,14 @@ windows, header lines, (hidden) `tab-bar` tabs and `transient`; terminals use
 
 ```
  ◉ 1 blocked · ● 1 done  🎤│ ◐ main · claude-opus-5-5 · 41%   [↑] [↓] [⑂] [⤢] [✕]
- ▾ ◐ pi                 +  │ …chat…
-   ◐ main               ✕  │ …input…
-     ◐ review           ✕  │ ○ tests (exit 0)                             [⤢] [✕]
-     ○ tests            ✕  │ …terminal…
+pi (3) ◐                +  │ …chat…
+ ◐ main                 ✕  │ …input…
+   ◐ review             ✕  │ ○ tests (exit 0)                             [⤢] [✕]
+   ○ tests              ✕  │ …terminal…
    ▸ 2 finished workers    │
- ▸ ● swarmy             +  │
+swarmy (2) ●            +  │
                            │
- + New space               │
++ New space                │
 ```
 
 - A **space** is a project directory with one window layout. Switching
@@ -73,19 +73,20 @@ Showing an agent in another space's layout never moves it.
 ## Sidebar
 
 A side window (`pi-deck-sidebar-side`, default left) in every frame wide
-enough for it: at least twice `pi-deck-sidebar-width` (36) columns.
-Narrower frames hide it; navigate there with `g` and `n`. `b` toggles it
-everywhere and saves the choice. All frames and spaces share one width;
-dragging the sidebar's edge sets it everywhere for the session.
+enough for it: `pi-deck-sidebar-width` (28) columns plus
+`pi-deck-sidebar-min-pane-width` (44) for panes. Narrower frames hide it;
+navigate there with `g` and `n`. `b` toggles it everywhere and saves the
+choice. All frames and spaces share one width; dragging the sidebar's edge
+sets it everywhere and saves it.
 
 - The **header line** shows the status summary (`◉ 2 blocked · ● 1 done`,
   the statuses in `pi-deck-summary-statuses`; just counts when it does not
   fit; "all idle" or "no agents" otherwise). Clicking it goes to the next
   agent needing attention. Buttons from `pi-deck-sidebar-header-items`
   follow at the right (see [Options](#options)).
-- Each **space** is a header: rolled-up status, `▸`/`▾` (folds), name
-  (switches to the space and unfolds it; the current space is underlined),
-  agent count, and `+` (menu: new agent, new shell).
+- Each **space** is a header: name (switches to the space and unfolds it;
+  the current space is underlined), agent count (folds; `TAB` too),
+  rolled-up status, and `+` (menu: new agent, new shell).
 - Under it the space's **agents**, with workers, forks and panels nested
   under their parent, each with status, name, detail and a ✕ that stops it
   (see [Hiding and stopping](#hiding-and-stopping)). Rows of agents the
@@ -262,7 +263,7 @@ instead.
   whether this Emacs owns it, in a temporary buffer), reload
   `user-init-file`, restart the daemon.
 
-The sidebar toggle is saved to `~/.emacs.d/var/pi-deck/preferences.eld`
+The sidebar toggle and dragged width are saved to `~/.emacs.d/var/pi-deck/preferences.eld`
 (`pi-deck-preferences-file`), never to your init files.
 
 ## Persistence and daemon restart
@@ -315,7 +316,8 @@ editor).
 `pi-deck-answer-on-jump`, `pi-deck-notify-method`, `pi-deck-notify-on`,
 `pi-deck-notify-shells`, `pi-deck-notify-bell`, `pi-deck-summary-statuses`,
 `pi-deck-grid-include-shells`, `pi-deck-sidebar`, `pi-deck-sidebar-side`,
-`pi-deck-sidebar-width`, `pi-deck-sidebar-header-items`,
+`pi-deck-sidebar-width`, `pi-deck-sidebar-min-pane-width`,
+`pi-deck-sidebar-header-items`,
 `pi-deck-show-panels`, `pi-deck-finished-workers-limit`,
 `pi-deck-status-icons`, `pi-deck-save-delay`, `pi-deck-state-file`,
 `pi-deck-preferences-file`, `pi-deck-restart-command`,

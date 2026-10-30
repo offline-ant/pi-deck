@@ -75,8 +75,8 @@ references use `declare-function`.
   `pi-deck--single-window` reduces a layout to one plain window.
 - The sidebar has one width for all frames and spaces: `pi-deck--sidebar-sync`
   enforces `pi-deck-sidebar-width`, and `pi-deck--on-window-size-change` adopts
-  a dragged width (a sidebar resized within an unchanged frame). Frames
-  narrower than twice the width hide it.
+  and saves a dragged width (a sidebar resized within an unchanged frame).
+  Frames without `pi-deck-sidebar-min-pane-width` columns beside it hide it.
 - Popup menus open on release (`mouse-3`, never `down-mouse-3`): a text
   terminal menu opened on press picks its first item at the release.
 - Closing a pane only hides it (`pi-deck-hide-pane`); agents stop only through

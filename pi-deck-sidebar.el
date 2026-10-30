@@ -5,9 +5,9 @@
 ;;; Commentary:
 
 ;; The sidebar is a side window on the left of every frame wide enough for
-;; it, showing a space tree: each space as a header (status, ▸/▾ fold,
-;; name, `+' menu) with its agents, workers and panels nested under their
-;; parent, each with a ✕ that stops it, folded "N finished workers" with
+;; it, showing a space tree: each space as a header (name, count that
+;; folds it, status, `+' menu) with its agents, workers and panels nested
+;; under their parent, each with a ✕ that stops it, folded "N finished workers" with
 ;; transcript links, and a final "+ New space" row.  Rows of agents the
 ;; selected frame shows are highlighted.  Its header line holds the status
 ;; summary (click: next agent needing attention) and the buttons of
@@ -18,7 +18,7 @@
 ;; alone, mouse-3 opens the row's context menu.
 ;;
 ;; All frames and spaces share one width, `pi-deck-sidebar-width';
-;; dragging the sidebar's edge changes it everywhere.
+;; dragging the sidebar's edge changes it everywhere and saves it.
 
 ;;; Code:
 
@@ -40,15 +40,22 @@
 (declare-function evil-set-initial-state "evil-core" (mode state))
 (declare-function evil-define-key* "evil-core" (state keymap key def &rest bindings))
 
-(defcustom pi-deck-sidebar-width 36
+(defcustom pi-deck-sidebar-width 28
   "Width of the agent sidebar in every frame and space.
-Dragging the sidebar's edge sets it for the rest of the session."
+Dragging the sidebar's edge changes it and saves the choice as a preference."
+  :type 'natnum
+  :group 'pi-deck)
+
+(defcustom pi-deck-sidebar-min-pane-width 44
+  "Columns the sidebar leaves for panes.
+Frames without this much room beside the sidebar hide it."
   :type 'natnum
   :group 'pi-deck)
 
 (defcustom pi-deck-sidebar t
   "Whether the agent sidebar is shown.
-It hides by itself in frames narrower than twice its width.
+It hides by itself in frames without `pi-deck-sidebar-min-pane-width'
+columns beside it.
 `pi-deck-sidebar-toggle' changes it and saves the choice as a preference."
   :type 'boolean
   :group 'pi-deck)
@@ -115,11 +122,19 @@ to a command reading (interactive \"e\")."
   "<mouse-3>" #'pi-deck-sidebar-mouse-3)
 
 (defun pi-deck-sidebar--clickable (string help)
-  "Return STRING as a clickable row with HELP shown on hover."
-  (add-text-properties 0 (max 0 (1- (length string)))
-                       (list 'mouse-face 'highlight 'help-echo help 'pointer 'hand
-                             'keymap pi-deck-sidebar-row-map)
-                       string)
+  "Return STRING as a clickable row with HELP shown on hover.
+Buttons in STRING keep their own help."
+  (let ((end (max 0 (1- (length string))))
+        (position 0))
+    (add-text-properties 0 end
+                         (list 'mouse-face 'highlight 'pointer 'hand
+                               'keymap pi-deck-sidebar-row-map)
+                         string)
+    (while (< position end)
+      (let ((next (next-single-property-change position 'help-echo string end)))
+        (unless (get-text-property position 'help-echo string)
+          (put-text-property position next 'help-echo help string))
+        (setq position next))))
   string)
 
 (defun pi-deck-sidebar--button (label action help)
@@ -154,11 +169,11 @@ HELP is shown on hover."
   "Return the row for AGENT at tree DEPTH."
   (let* ((detail (pi-deck-agent-detail agent))
          (indent (make-string (* 2 depth) ?\s))
-         (line (concat "   " indent (pi-deck-status-icon (pi-deck-agent-status agent)) " "
+         (line (concat " " indent (pi-deck-status-icon (pi-deck-agent-status agent)) " "
                        (truncate-string-to-width
                         (concat (pi-deck-agent-name agent)
                                 (when detail (propertize (concat "  " detail) 'face 'shadow)))
-                        (max 4 (- pi-deck-sidebar-width (length indent) 9)) nil nil "…")
+                        (max 4 (- pi-deck-sidebar-width (length indent) 7)) nil nil "…")
                        (pi-deck-sidebar--right
                         (pi-deck-sidebar--button "✕" 'stop "mouse-1: stop (asks when busy)"))
                        "\n")))
@@ -172,7 +187,7 @@ HELP is shown on hover."
   "Insert AGENT's closed workers at tree DEPTH: a count, or the list."
   (when-let* ((buffer (pi-deck-agent-buffer agent))
               (records (pi-deck-finished-workers buffer)))
-    (let ((indent (concat "   " (make-string (* 2 depth) ?\s)))
+    (let ((indent (concat " " (make-string (* 2 depth) ?\s)))
           (expanded (memq buffer pi-deck-sidebar--expanded-workers)))
       (insert (pi-deck-sidebar--clickable
                (propertize
@@ -196,19 +211,18 @@ HELP is shown on hover."
 
 (defun pi-deck-sidebar--space-header (space status count)
   "Return the header row for SPACE with rolled-up STATUS and agent COUNT.
-Its arrow folds, its name visits the space and its `+' opens the space's
-menu."
-  (let* ((name (or space "other"))
-         (collapsed (member name pi-deck-sidebar--collapsed)))
+Its name visits the space, its count folds it and its `+' opens the
+space's menu."
+  (let ((name (or space "other")))
     (pi-deck-sidebar--clickable
      (propertize
-      (concat " "
-              (pi-deck-sidebar--button (if collapsed "▸ " "▾ ") 'fold "mouse-1: fold or unfold")
-              (pi-deck-status-icon (or status 'idle)) " "
-              (propertize name 'face (if (and space (equal space pi-deck-sidebar--current-space))
+      (concat (propertize name 'face (if (and space (equal space pi-deck-sidebar--current-space))
                                          'pi-deck-current-space
                                        'bold))
-              (propertize (format " (%d)" count) 'face 'shadow)
+              " "
+              (pi-deck-sidebar--button (format "(%d)" count) 'fold "mouse-1: fold or unfold")
+              " "
+              (pi-deck-status-icon (or status 'idle))
               (when space
                 (pi-deck-sidebar--right
                  (pi-deck-sidebar--button "+" 'space-menu "mouse-1: new agent or shell")))
@@ -287,7 +301,7 @@ The summary leaves out status names when they would not fit."
     (erase-buffer)
     (pi-deck-sidebar--insert-spaces (pi-deck-agents) (pi-deck-tab-index))
     (insert "\n" (pi-deck-sidebar--clickable
-                  (propertize (concat " " (propertize "+ New space" 'face 'link) "\n")
+                  (propertize (concat (propertize "+ New space" 'face 'link) "\n")
                               'pi-deck-action #'pi-deck-create-space)
                   "mouse-1: create a space for a project directory"))
     (goto-char (point-min))
@@ -523,8 +537,8 @@ The first click already jumped to it; buttons ignore double clicks."
 ;;;; Window
 
 (defun pi-deck--sidebar-fits-p (&optional frame)
-  "Return non-nil when FRAME is at least twice as wide as the sidebar."
-  (>= (frame-width frame) (* 2 pi-deck-sidebar-width)))
+  "Return non-nil when FRAME has room for the sidebar and panes beside it."
+  (>= (frame-width frame) (+ pi-deck-sidebar-width pi-deck-sidebar-min-pane-width)))
 
 (defun pi-deck--sidebar-show ()
   "Show the sidebar in the selected frame."
@@ -558,7 +572,8 @@ It shows when `pi-deck-sidebar' is on and the frame fits it."
 (defun pi-deck--on-window-size-change (frame)
   "Follow size changes in FRAME, for `window-size-change-functions'.
 A sidebar resized within an unchanged frame was dragged: its width becomes
-`pi-deck-sidebar-width'.  A resized frame shows or hides the sidebar."
+the saved `pi-deck-sidebar-width'.  A resized frame shows or hides the
+sidebar."
   (let ((window (get-buffer-window pi-deck-sidebar-buffer-name frame))
         (root (frame-root-window frame)))
     (if (/= (window-old-pixel-width root) (window-pixel-width root))
@@ -570,11 +585,13 @@ A sidebar resized within an unchanged frame was dragged: its width becomes
                  (/= (window-old-pixel-width window) (window-pixel-width window))
                  (/= (window-total-width window) pi-deck-sidebar-width))
         (setq pi-deck-sidebar-width (window-total-width window))
-        (pi-deck-sidebar-refresh (window-buffer window))))))
+        (pi-deck-sidebar-refresh (window-buffer window))
+        (with-demoted-errors "pi-deck: %S"
+          (pi-deck-save-preference 'pi-deck-sidebar-width))))))
 
 ;;;; Preferences
 
-(defconst pi-deck-preference-variables '(pi-deck-sidebar)
+(defconst pi-deck-preference-variables '(pi-deck-sidebar pi-deck-sidebar-width)
   "Variables commands save to `pi-deck-preferences-file'.")
 
 (defun pi-deck--read-preferences ()
