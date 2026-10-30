@@ -283,13 +283,15 @@ The sidebar toggle and dragged width are saved to `~/.emacs.d/var/pi-deck/prefer
 layouts, agents starting, closing or finishing a turn — and at exit, never
 periodically; `pi-deck-save-delay`) writes
 `~/.emacs.d/var/pi-deck/state.eld`: spaces, each space's layout, the current
-space, Pi sessions with their session files in sidebar order, and terminals
-with directory and command. `pi-deck-restore-state` resumes Pi sessions
+space, Pi sessions with their session files in sidebar order, terminals
+with directory and command, and finished workers. `pi-deck-restore-state` resumes Pi sessions
 with `pi --session FILE` (history included) and restarts terminals, starting
 them `pi-deck-restore-interval` seconds apart (0.15); once all exist, client
 frames show the saved current space with its layout. Orchestration workers
 and panels belong to their parent Pi and are not restored; sessions you
-stopped stay stopped.
+stopped stay stopped. Finished workers return under their parent, unless
+the parent did not come back (it was a worker itself) or the session file
+is gone.
 
 The state file belongs to one Emacs server, recorded by its socket. That
 server restores it whenever it starts, however it stopped (restart,

@@ -14,8 +14,9 @@
 ;;
 ;; Workers are ephemeral: the host kills their buffers when they finish.
 ;; Their session files remain, so each closed worker is remembered under its
-;; parent.  It can be read in Pilish's read-only saved-conversation view, or
-;; resumed as an independent session whose results stay with you.
+;; parent, also across restarts of Emacs.  It can be read in Pilish's read-only
+;; saved-conversation view, or resumed as an independent session whose results
+;; stay with you.
 
 ;;; Code:
 

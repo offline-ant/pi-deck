@@ -6,10 +6,11 @@
 
 ;; The state file records registered spaces, each space's layout (a
 ;; writable window state), the current space, Pilish sessions with their
-;; session files, and terminals with their directory and command.
-;; Restoring resumes Pi sessions from those files and restarts terminals;
-;; frames then show the current space with its layout.  Orchestration
-;; workers and panels belong to their parent Pi and are never restored.
+;; session files, terminals with their directory and command, and closed
+;; workers.  Restoring resumes Pi sessions from those files and restarts
+;; terminals; frames then show the current space with its layout.
+;; Orchestration workers and panels belong to their parent Pi and are never
+;; restored; closed workers return under their restored parent.
 ;;
 ;; The file belongs to one Emacs server, recorded by its socket.  That
 ;; server restores it whenever it starts, however it stopped, and is the
@@ -86,6 +87,13 @@ TAB-INDEX caches `pi-deck-tab-index'."
                :command (buffer-local-value 'pi-deck--shell-command buffer)
                :space space))))))
 
+(defun pi-deck--finished-worker-records ()
+  "Return the closed workers as saved: parents become buffer names."
+  (mapcar (lambda (record)
+            (plist-put (copy-sequence record) :parent
+                       (buffer-name (plist-get record :parent))))
+          pi-deck--finished-workers))
+
 (defun pi-deck-state ()
   "Return the current deck state.
 The layouts on screen are remembered first, the selected frame's last."
@@ -100,7 +108,8 @@ The layouts on screen are remembered first, the selected frame's last."
           :layouts pi-deck--layouts
           :agents (let ((tab-index (pi-deck-tab-index)))
                     (delq nil (mapcar (lambda (agent) (pi-deck--agent-record agent tab-index))
-                                      (pi-deck-agents)))))))
+                                      (pi-deck-agents))))
+          :finished-workers (pi-deck--finished-worker-records))))
 
 (defvar pi-deck--last-saved nil
   "Cons of the file and text last written by `pi-deck-save-state'.")
@@ -170,12 +179,13 @@ Nothing is saved during a restore: the file still lists what remains."
     (pi-deck-schedule-save)))
 
 (defvar pi-deck--saved-structure nil
-  "Spaces and agent buffers when a save was last scheduled for them.")
+  "Spaces, agent buffers and closed workers when a save was last scheduled.")
 
 (defun pi-deck--save-on-structure-change ()
-  "Schedule a save when spaces or the set of agents changed."
-  (let ((structure (cons (copy-tree pi-deck-spaces)
-                         (mapcar #'pi-deck-agent-buffer (pi-deck-agents)))))
+  "Schedule a save when spaces, the set of agents or closed workers changed."
+  (let ((structure (list (copy-tree pi-deck-spaces)
+                         (mapcar #'pi-deck-agent-buffer (pi-deck-agents))
+                         pi-deck--finished-workers)))
     (unless (equal structure pi-deck--saved-structure)
       (setq pi-deck--saved-structure structure)
       (pi-deck-schedule-save))))
@@ -232,12 +242,30 @@ saved current space; later frames show it too."
     (when (pi-deck-space (plist-get state :space))
       (setq pi-deck--last-space (plist-get state :space)))
     (setq pi-deck--restoring t)
-    (pi-deck--restore-next (plist-get state :agents) (length (plist-get state :spaces)) 0)))
+    (pi-deck--restore-next (plist-get state :agents) (length (plist-get state :spaces)) 0
+                           (plist-get state :finished-workers))))
 
-(defun pi-deck--restore-next (records spaces restored)
+(defun pi-deck--restore-finished-workers (records)
+  "Remember the saved closed workers RECORDS under their restored parents.
+Records without a tracked parent or a readable session file are dropped,
+and so are those already remembered."
+  (let ((known (mapcar (lambda (record) (plist-get record :session-file))
+                       pi-deck--finished-workers))
+        restored)
+    (dolist (record records)
+      (let ((name (plist-get record :parent))
+            (file (plist-get record :session-file)))
+        (when-let* ((parent (and name (get-buffer name))))
+          (when (and (pi-deck-agent parent) (file-readable-p file) (not (member file known)))
+            (push (plist-put (copy-sequence record) :parent parent) restored)))))
+    (setq pi-deck--finished-workers
+          (append pi-deck--finished-workers (nreverse restored)))))
+
+(defun pi-deck--restore-next (records spaces restored workers)
   "Restore RECORDS one by one; report SPACES and RESTORED sessions.
 After each started record, the rest wait `pi-deck-restore-interval'.
-Afterwards client frames showing no space show the current one."
+Afterwards the closed WORKERS return under their parents and client frames
+showing no space show the current one."
   (setq pi-deck--restoring t)
   (while (and records (eq pi-deck--restoring t))
     (when (pi-deck--restore-agent (pop records))
@@ -245,9 +273,10 @@ Afterwards client frames showing no space show the current one."
       (when (and records (> pi-deck-restore-interval 0))
         (setq pi-deck--restoring
               (run-with-timer pi-deck-restore-interval nil #'pi-deck--restore-next
-                              records spaces restored)))))
+                              records spaces restored workers)))))
   (unless (timerp pi-deck--restoring)
     (setq pi-deck--restoring nil)
+    (pi-deck--restore-finished-workers workers)
     ;; Layouts name the restored buffers: show them only now.
     (mapc #'pi-deck--open-last-space (pi-deck--client-frames))
     (pi-deck--schedule-update)

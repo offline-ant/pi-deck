@@ -1607,6 +1607,56 @@ MARK is `shown' (highlighted: the frame shows it) or nil."
 
 ;;;; Persistence and daemon
 
+(ert-deftest pi-deck-test-finished-workers-survive-restart ()
+  (pi-deck-test--with-large-frame
+   (pi-deck-test--with-deck
+    (pi-deck-create-space dir "space")
+    (let* ((parent (pi-deck-test--session dir "keep"))
+           (nested (pi-deck-test--session dir "nested"))
+           (parent-name (buffer-name parent))
+           (kept (pi-deck-test--finished-worker dir parent "do-1"))
+           (unreadable (pi-deck-test--finished-worker dir parent "do-2")))
+      (pi-deck-test--finished-worker dir nested "do-3")
+      ;; A worker's own closed workers have no parent to return to.
+      (setf (pi-deck-agent-target (pi-deck-agent nested)) "t-2")
+      (let ((saved (plist-get (progn (pi-deck-save-state) (pi-deck-read-state))
+                              :finished-workers)))
+        (should (equal (mapcar (lambda (record) (plist-get record :name)) saved)
+                       '("do-3" "do-2" "do-1")))
+        (should (equal (plist-get (nth 2 saved) :parent) parent-name)))
+      (delete-file (plist-get unreadable :session-file))
+      ;; Simulate a restart.
+      (setf (pi-deck-agent-target (pi-deck-agent nested)) nil)
+      (pi-deck-stop-agent (pi-deck-agent parent))
+      (pi-deck-stop-agent (pi-deck-agent nested))
+      (should-not pi-deck--finished-workers)
+      (set-frame-parameter nil 'tabs nil)
+      (pi-deck--single-window)
+      (switch-to-buffer "*scratch*")
+      (setq pi-deck-spaces nil pi-deck--layouts nil pi-deck--last-space nil)
+      (cl-letf (((symbol-function 'pilish-start-session)
+                 (lambda (directory name &rest _) (pi-deck-test--session directory name))))
+        (pi-deck-restore-state)
+        (let* ((restored (get-buffer parent-name))
+               (records (pi-deck-finished-workers restored)))
+          (should (equal records (list (plist-put (copy-sequence kept) :parent restored))))
+          (should (equal (length pi-deck--finished-workers) 1))
+          ;; Its row and links work as before; restoring again adds nothing.
+          (with-current-buffer (pi-deck-sidebar-buffer)
+            (pi-deck-sidebar-refresh)
+            (should (string-match-p "▸ 1 finished worker" (buffer-string))))
+          (pi-deck-restore-state)
+          (should (equal (length pi-deck--finished-workers) 1))
+          ;; Clearing the list is saved like any other change.
+          (pi-deck--save-on-structure-change)
+          (pi-deck--save-now)
+          (let ((pi-deck-save-delay 1000))
+            (pi-deck-clear-finished-workers restored)
+            (pi-deck--save-on-structure-change)
+            (should pi-deck--save-timer)
+            (pi-deck--save-now))
+          (should-not (plist-get (pi-deck-read-state) :finished-workers))))))))
+
 (ert-deftest pi-deck-test-save-and-restore-state ()
   (pi-deck-test--with-large-frame
    (pi-deck-test--with-deck

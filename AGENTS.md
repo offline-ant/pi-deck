@@ -18,7 +18,7 @@ for Pi sessions via Pilish. User documentation: `README.md`.
 | `pi-deck-goto.el` | agent picker, jump, show alone, next attention/agent, dialog answering |
 | `pi-deck-notify.el` | blocked/finished notifications; `pi-deck-notify-functions` hook for other deliveries (pi-sound) |
 | `pi-deck-layout.el` | grid of the space's agents |
-| `pi-deck-persist.el` | state file (version 2), restore, frame setup, `pi-deck-show-session` |
+| `pi-deck-persist.el` | state file (version 2, including closed workers), restore, frame setup, `pi-deck-show-session` |
 | `pi-deck-daemon.el` | server info (`pi-deck-daemon-info`), config reload, daemon restart |
 | `pi-deck-menu.el` | transient menu |
 | `test/pi-deck-test.el` | ERT suite (fake Pilish sessions, real ghostel terminals) |
@@ -112,7 +112,9 @@ references use `declare-function`.
 - A terminal whose process ended stays an agent (panels keep their buffers for
   `panel-read`); the sidebar only folds it into its space's finished shells row
   (`pi-deck-agent-finished-shell-p`), whose ✕ stops those agents. Finished workers
-  are records of buffers already gone, so their ✕ only forgets the records.
+  are records of buffers already gone, so their ✕ only forgets the records. The
+  state file keeps them with parents as buffer names; a restore relinks those whose
+  parent came back with a readable session file (workers' own closed workers do not).
 - Resuming a closed worker (`pi-deck-resume-finished-worker`) starts an ordinary
   session on its file: no orchestration target, no result to the parent.
 - `*.elc` files are build output (`make compile`), not tracked; the config
