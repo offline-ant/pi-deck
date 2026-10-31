@@ -31,18 +31,118 @@ swarmy (2) ●            +  │
 
 ## Setup
 
-Requires Emacs 31.1, Pilish from the `pi-orchestration` branch (pending dialog
-API), ghostel 0.59.0 with its native module and, for orchestration workers,
-`pi-ant/orchestration/emacs/pi-orchestration.el`.
+### Requirements
+
+- Emacs **31.1 or later**, built with tree-sitter and dynamic module support.
+- [Pi CLI](https://pi.dev) on Emacs's `PATH`, authenticated with your provider.
+  Pi **1.4.0** is the tested version; use Node.js **22.19 or later**.
+- The [Pilish fork's `pi-orchestration` branch](https://github.com/offline-ant/pilish/tree/pi-orchestration),
+  not stock MELPA Pilish. pi-deck needs its session, dialog and window-pair APIs;
+  the `pilish >= 3.1.0` package header alone does not identify this fork.
+- Emacs packages: `ghostel >= 0.59.0`, `transient >= 0.9.0`, and Pilish's
+  dependencies `magit-section >= 4.0.0`, `md-ts-mode >= 0.5.0` and
+  `markdown-table-wrap >= 0.2.0`. Package.el resolves their further dependencies,
+  including `compat` when required, from the archives below.
+- Ghostel's native module for your platform, plus the `markdown` and
+  `markdown-inline` tree-sitter grammars. Grammar installation needs Git and a
+  C compiler. Other language grammars are optional.
+
+These instructions follow moving branches and package archives, not a locked
+or reproducible dependency set. The Emacs daemon restart command additionally
+needs a Unix-like system with `setsid` supporting `-f` (util-linux on Linux),
+`sh`, `kill` and `sleep` on `PATH`.
+
+### Install
+
+Install and authenticate Pi in a terminal first:
+
+```sh
+npm install -g --ignore-scripts @earendil-works/pi-coding-agent@1.4.0
+pi --version
+pi
+# In Pi, run /login for your provider, then exit.
+```
+
+Clone these checkouts (adjust the paths together if you use another location):
+
+```sh
+mkdir -p ~/.emacs.d/site-lisp
+git clone --branch pi-orchestration https://github.com/offline-ant/pilish.git ~/.emacs.d/site-lisp/pilish
+git clone https://github.com/offline-ant/pi-deck.git ~/.emacs.d/site-lisp/pi-deck
+```
+
+Evaluate this once in Emacs to install the external packages. GNU ELPA is
+needed alongside MELPA for dependencies such as `compat`; allow upgrades of
+bundled `transient` if necessary.
 
 ```elisp
-(use-package pi-deck
-  :load-path "/home/devops/Projects/pi/pi-deck"
-  :demand t
-  :config
-  (pi-deck-mode 1)
-  (keymap-global-set "C-c d" 'pi-deck-command-map))
+(require 'package)
+(add-to-list 'package-archives '("gnu" . "https://elpa.gnu.org/packages/") t)
+(add-to-list 'package-archives '("nongnu" . "https://elpa.nongnu.org/nongnu/") t)
+(add-to-list 'package-archives '("melpa" . "https://melpa.org/packages/") t)
+(setq package-install-upgrade-built-in t)
+(package-initialize)
+(package-refresh-contents)
+(dolist (pkg '(transient magit-section md-ts-mode markdown-table-wrap ghostel))
+  (package-install pkg))
 ```
+
+Add this to your init file, after package initialization:
+
+```elisp
+(add-to-list 'load-path (expand-file-name "site-lisp/pilish" user-emacs-directory))
+(add-to-list 'load-path (expand-file-name "site-lisp/pi-deck" user-emacs-directory))
+(require 'pilish)
+(require 'ghostel)
+```
+
+Before enabling pi-deck or restoring background sessions, run
+`M-x pilish-install-grammars` and install both Markdown grammars, then run
+`M-x ghostel-download-module` to download Ghostel's prebuilt module. Platforms
+without a prebuilt module need Ghostel's Zig build procedure; see the
+[Ghostel documentation](https://github.com/dakra/ghostel).
+Check `M-x ghostel` opens a working terminal and `M-x pilish` starts Pi.
+If Pi is not on Emacs's `PATH`, set `pilish-executable` to its absolute path
+(as a list, e.g. `'("/path/to/pi")`).
+
+Then add:
+
+```elisp
+(require 'pi-deck)
+(pi-deck-mode 1)
+(keymap-global-set "C-c d" 'pi-deck-command-map)
+(xterm-mouse-mode 1) ; mouse support in text frames
+```
+
+### Optional orchestration
+
+Ordinary Pilish sessions and your own shells work without pi-ant. For managed
+workers, agent-started panels and forks, install the public orchestration
+package and load its Emacs companion **before starting any Pi sessions**:
+
+```sh
+git clone https://github.com/offline-ant/pi-ant.git ~/.emacs.d/site-lisp/pi-ant
+pi install ~/.emacs.d/site-lisp/pi-ant/orchestration
+```
+
+After `(require 'pilish)` and `(require 'ghostel)` in your init file, before
+enabling pi-deck:
+
+```elisp
+(add-to-list 'load-path
+             (expand-file-name "site-lisp/pi-ant/orchestration/emacs"
+                               user-emacs-directory))
+(require 'pi-orchestration)
+```
+
+Run Emacs as a server/daemon so the companion can expose its live socket to
+Pi children. No `npm install` is needed in pi-ant or its orchestration package;
+Pi resolves extension imports from its installed CLI. The separate pi-ant
+root package (for `ask`, `/tools` and other extensions) is optional and has its
+own [installation instructions](https://github.com/offline-ant/pi-ant#install).
+See the [orchestration guide](https://github.com/offline-ant/pi-ant/tree/main/orchestration)
+for host selection and shell prompt integration. Restart Pi sessions after
+configuring packages and the companion.
 
 `pi-deck-mode` starts tracking agents, shows the sidebar and sets
 `tab-bar-show` to nil: each frame keeps a space's layout in a hidden tab, so
@@ -356,7 +456,15 @@ install into `.cache/elpa/<version>`;
 Pilish is taken from `../pilish` (`PILISH_DIR`), orchestration from
 `../pi-ant/orchestration/emacs` (`ORCHESTRATION_DIR`). The smoke test uses a
 private server socket and agent directory, only the in-process faux provider
-(`test/support/faux.ts`), and kills its daemons.
+(`test/support/faux.ts`), and kills its daemons. Install the two Markdown
+grammars into `~/.emacs.d/tree-sitter` before running it; the current smoke
+script looks there rather than bootstrapping grammars. Its panel checks also
+need tmux (otherwise they are skipped). The dependency helper does not install
+Pilish or pi-ant, lock archive versions, or upgrade packages already present;
+check the minimum versions listed above when reusing its cache. For a
+terminal-only smoke run with PGTK Emacs, use
+`env -u DISPLAY -u WAYLAND_DISPLAY GDK_BACKEND=x11 make smoke` to keep the
+disposable daemon off desktop displays.
 
 ## Limitations
 
