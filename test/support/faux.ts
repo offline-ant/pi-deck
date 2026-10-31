@@ -13,11 +13,16 @@ export default function piDeckFaux(pi: ExtensionAPI): void {
   // Prompts containing "slow" stay working for four seconds, "slow N" for N
   // seconds (manual checks);
   // "open panel NAME" / "close panel NAME" call the orchestration panel tools;
-  // "run worker" starts an orchestration `do` worker.
+  // "run worker" starts an orchestration `do` worker;
+  // "run refusing worker" starts one whose task is refused;
+  // "refuse" ends the run with a provider refusal.
   provider.setResponses(Array.from({ length: 100 }, () => async (context: TranscriptContext) => {
     const last = context.messages.at(-1);
     if (last?.role === "toolResult") return fauxAssistantMessage(`faux tool done: ${last.toolName}`);
     const text = lastUserText(context);
+    if (text.includes("run refusing worker")) {
+      return fauxAssistantMessage([fauxToolCall("do", { task: "refuse once" })], { stopReason: "toolUse" });
+    }
     if (text.includes("run worker")) {
       return fauxAssistantMessage([fauxToolCall("do", { task: "say hello from the worker" })], { stopReason: "toolUse" });
     }
@@ -30,6 +35,9 @@ export default function piDeckFaux(pi: ExtensionAPI): void {
     }
     const slow = /slow(?: (\d+))?/.exec(text);
     if (slow) await new Promise((resolve) => setTimeout(resolve, 1000 * Number(slow[1] ?? 4)));
+    if (text.includes("refuse")) {
+      return fauxAssistantMessage("", { stopReason: "error", errorMessage: "Claude declined to respond (refusal: cyber): faux" });
+    }
     return fauxAssistantMessage(`faux reply: ${text}`);
   }));
   pi.registerProvider(provider.provider);

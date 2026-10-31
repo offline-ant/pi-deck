@@ -43,6 +43,7 @@ cat > "$TMP/init.el" <<EOI
       pilish-extra-args '("--no-extensions" "--no-skills" "--no-prompt-templates"
                           "--no-context-files" "-e" "$DECK_DIR/test/support/faux.ts"
                           "-e" "$ORCHESTRATION_DIR/.."
+                          "-e" "$ORCHESTRATION_DIR/../../extensions/error-prompt.ts"
                           "--provider" "pi-deck-faux" "--model" "one")
       ;; The configured look: Pi-style chats and draft-fitted inputs.
       pilish-chat-style 'pi

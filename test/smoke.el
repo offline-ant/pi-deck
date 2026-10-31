@@ -125,6 +125,33 @@
                           (cl-notany (lambda (overlay) (overlay-get overlay 'before-string))
                                      (with-current-buffer input
                                        (overlays-in (point-min) (point-max)))))))
+    ;; A run ending in an error asks like a dialog: one ping and no "finished"
+    ;; first.  Continue retries; typing a reply answers the question as well.
+    (when (get-buffer-window chat) (pi-deck-hide-pane (get-buffer-window chat)))
+    (setq pi-deck-smoke-notifications nil)
+    (pi-deck-smoke--submit chat "refuse this")
+    (pi-deck-smoke--wait "blocked on the error" (lambda () (eq (pi-deck-agent-status agent) 'blocked)))
+    (unless (string-prefix-p "asks: Error: Claude declined" (pi-deck-agent-detail agent))
+      (error "Unexpected detail %S" (pi-deck-agent-detail agent)))
+    (unless (equal pi-deck-smoke-notifications '("main needs attention"))
+      (error "Unexpected notifications: %S" pi-deck-smoke-notifications))
+    (pi-deck-jump agent)
+    (with-current-buffer chat
+      (unless (eq (get-text-property (point) 'pilish-dialog-choice) 0)
+        (error "Jump did not focus the error dialog"))
+      (push-button (point)))
+    (pi-deck-smoke--wait "continued run"
+                         (lambda () (and (eq (pi-deck-agent-state agent) 'idle)
+                                         (string-match-p "faux reply: continue"
+                                                         (pi-deck-smoke--chat-text chat)))))
+    (pi-deck-smoke--submit chat "refuse this")
+    (pi-deck-smoke--wait "blocked again" (lambda () (eq (pi-deck-agent-status agent) 'blocked)))
+    (pi-deck-smoke--submit chat "my own reply")
+    (pi-deck-smoke--wait "typed reply"
+                         (lambda () (and (eq (pi-deck-agent-state agent) 'idle)
+                                         (null (pi-deck-agent-dialogs agent))
+                                         (string-match-p "faux reply: my own reply"
+                                                         (pi-deck-smoke--chat-text chat)))))
     (pi-deck-save-state)
     (format "PASS1 %s" (plist-get (buffer-local-value 'pilish--state chat) :session-file))))
 
@@ -209,7 +236,34 @@ Panel names end in SUFFIX: Pi's panel names are global to the machine."
           (error "A second resume started another session"))
         (pi-deck-stop resumed)
         (pi-deck-smoke--wait "resumed session stopped"
-                             (lambda () (not (buffer-live-p (pi-deck-agent-buffer resumed)))))))
+                             (lambda () (not (buffer-live-p (pi-deck-agent-buffer resumed))))))
+      ;; A refused worker asks in its own chat; its parent keeps waiting, then
+      ;; gets the result with Continue reported as user guidance.
+      (pi-deck-smoke--submit chat "run refusing worker")
+      (let (worker)
+        (pi-deck-smoke--wait
+         "blocked worker"
+         (lambda ()
+           (setq worker (cl-find-if (lambda (candidate)
+                                      ;; Its waiting status arrives just before the dialog.
+                                      (and (pi-deck-agent-worker-p candidate)
+                                           (pi-deck-agent-dialogs candidate)))
+                                    (pi-deck-agents)))))
+        (unless (string-prefix-p "asks: Error: Claude declined" (pi-deck-agent-detail worker))
+          (error "Unexpected worker detail %S" (pi-deck-agent-detail worker)))
+        (unless (eq (pi-deck-agent-state agent) 'working)
+          (error "The parent stopped waiting for its worker"))
+        (pi-deck-jump worker)
+        (with-current-buffer (pi-deck-agent-buffer worker)
+          (unless (eq (get-text-property (point) 'pilish-dialog-choice) 0)
+            (error "Jump did not focus the worker's dialog"))
+          (push-button (point))))
+      (pi-deck-smoke--wait "parent got the worker result"
+                           (lambda () (eq (pi-deck-agent-state agent) 'idle)))
+      (with-temp-buffer
+        (insert-file-contents (plist-get (buffer-local-value 'pilish--state chat) :session-file))
+        (unless (re-search-forward "User guidance.*continue.*faux reply: continue" nil t)
+          (error "The parent's result lacks the Continue guidance"))))
     "PASS-PANELS"))
 
 (defvar pi-deck-smoke-panels-result nil
