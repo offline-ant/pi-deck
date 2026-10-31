@@ -245,7 +245,7 @@ Each agent has a base state and a *seen* flag:
 
 | Icon | Status | Meaning |
 |---|---|---|
-| ◉ | blocked | a Pi extension dialog (confirm, select, input, editor; e.g. the `ask` tool) awaits you, or an interrupted worker is waiting for you (detail "waiting for you") |
+| ◉ | blocked | a Pi extension dialog (confirm, select, input, editor; e.g. the `ask` tool, or `error-prompt` after a run error) awaits you, or an interrupted worker is waiting for you (detail "waiting for you") |
 | ● | done | finished work (working/blocked → idle) while not visible; cleared once shown |
 | ◐ | working | Pilish reports activity (sending, thinking, replying, running tools, compacting); for terminals, a command runs |
 | ○ | idle | waiting for input; for terminals, at the prompt or exited |
@@ -380,7 +380,8 @@ The sidebar toggle and dragged width are saved to `~/.emacs.d/var/pi-deck/prefer
 ## Persistence and daemon restart
 
 `pi-deck-save-state` (also about 2 s after changes — spaces, window
-layouts, agents starting, closing or finishing a turn — and at exit, never
+layouts, agents starting, closing or finishing a turn, a session replaced
+in place, also from another frontend sharing it — and at exit, never
 periodically; `pi-deck-save-delay`) writes
 `~/.emacs.d/var/pi-deck/state.eld`: spaces, each space's layout, the current
 space, Pi sessions with their session files in sidebar order, terminals

@@ -1268,7 +1268,7 @@ MARK is `shown' (highlighted: the frame shows it) or nil."
                  (list :id (car spec) :endpoint "test"
                        :spec (list :kind "pi" :name (car spec) :cwd "/tmp/" :placement (cadr spec)
                                    :sessionFile (expand-file-name "x.jsonl" dir)
-                                   :parent (list :id (buffer-name parent))))))
+                                   :parent (list :id (pi-orchestration--root-id parent))))))
               (pi-deck-test--settle)
               ;; Neither gets a layout of its own or a pane.
               (should (= (length (tab-bar-tabs)) 1))
@@ -1298,7 +1298,7 @@ MARK is `shown' (highlighted: the frame shows it) or nil."
             (pi-orchestration--start
              (list :id "panel-1" :endpoint "test"
                    :spec (list :kind "shell" :name "build" :cwd "/tmp/"
-                               :parent (list :id (buffer-name parent))
+                               :parent (list :id (pi-orchestration--root-id parent))
                                :argv ["/bin/sh" "-c" "read line"])))
             (let ((panel (pi-deck-agent (plist-get (pi-orchestration--target "panel-1") :buffer))))
               (should panel)
@@ -1306,6 +1306,12 @@ MARK is `shown' (highlighted: the frame shows it) or nil."
               (should (equal (pi-deck-agent-target panel) "panel-1"))
               (should (equal (pi-deck-agent-space panel) "space"))
               (should-not (pi-deck--agent-record panel (pi-deck-tab-index)))
+              ;; A session move renames the parent's chat: the link stays.
+              (let ((name (buffer-name parent)))
+                (with-current-buffer parent (rename-buffer "*pilish-chat:/moved/*"))
+                (pi-deck-refresh)
+                (should (eq (pi-deck-agent-parent panel) parent))
+                (with-current-buffer parent (rename-buffer name)))
               (with-current-buffer (pi-deck-sidebar-buffer)
                 (pi-deck-sidebar-refresh)
                 (should (string-match-p "○ root .*\n   [^ \n]+ build "
@@ -1322,7 +1328,7 @@ MARK is `shown' (highlighted: the frame shows it) or nil."
                     (pi-orchestration--start
                      (list :id id :endpoint "test"
                            :spec (list :kind "shell" :name id :cwd "/tmp/"
-                                       :parent (list :id (buffer-name parent))
+                                       :parent (list :id (pi-orchestration--root-id parent))
                                        :argv ["/bin/sh" "-c" "read line"])))
                     (plist-get (pi-orchestration--target id) :buffer))))
       (unwind-protect
@@ -1398,7 +1404,36 @@ MARK is `shown' (highlighted: the frame shows it) or nil."
       (with-current-buffer worker
         (pilish--extension-ui-set-status
          '(:statusKey "other" :statusText "worker:waiting")))
+      (should (eq (pi-deck-agent-state agent) 'idle))
+      ;; A shared process's snapshot clears a status it did not replay.
+      (pi-deck-test--waiting worker "worker:waiting · interrupted")
+      (should (eq (pi-deck-agent-state agent) 'blocked))
+      (pi-deck-test--waiting worker nil)
       (should (eq (pi-deck-agent-state agent) 'idle)))))
+
+(ert-deftest pi-deck-test-session-identity-change-is-saved ()
+  "A session replaced in place, also by another frontend, is saved."
+  (pi-deck-test--with-deck
+    (pi-deck-create-space dir "space")
+    (let* ((chat (pi-deck-test--session dir "root"))
+           (pi-deck-save-delay 1000)
+           (pilish-session-identity-functions (list #'pi-deck--on-session-identity)))
+      (pi-deck--save-now)
+      (should-not pi-deck--save-timer)
+      (with-current-buffer chat
+        (pilish--note-session-identity)
+        (pi-deck--save-now)
+        (setq pilish--state (plist-put pilish--state :session-file
+                                       (expand-file-name "other.jsonl" dir)))
+        (pilish--note-session-identity))
+      (should pi-deck--save-timer)
+      (pi-deck--save-now)
+      (should (equal (plist-get (car (plist-get (pi-deck-read-state) :agents)) :session-file)
+                     (expand-file-name "other.jsonl" dir))))))
+
+(ert-deftest pi-deck-test-mode-listens-to-session-identity ()
+  (should (member '(pilish-session-identity-functions . pi-deck--on-session-identity)
+                  pi-deck--hooks)))
 
 (ert-deftest pi-deck-test-mode-listens-to-extension-status ()
   (should (member '(pilish-extension-status-functions . pi-deck--on-extension-status)

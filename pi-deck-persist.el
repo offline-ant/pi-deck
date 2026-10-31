@@ -190,6 +190,15 @@ Nothing is saved during a restore: the file still lists what remains."
       (setq pi-deck--saved-structure structure)
       (pi-deck-schedule-save))))
 
+(defun pi-deck--on-session-identity (chat-buffer)
+  "Save after CHAT-BUFFER's session file, directory or name changed.
+A restart resumes the session file the state names, and another
+frontend sharing the process may have replaced the session."
+  (when (buffer-live-p chat-buffer)
+    (pi-deck-refresh-agent chat-buffer)
+    (pi-deck--schedule-update)
+    (pi-deck-schedule-save)))
+
 ;;;; Restoring
 
 (defun pi-deck--restore-agent (record)

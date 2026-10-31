@@ -32,7 +32,8 @@ references use `declare-function`.
 
 - Pilish integration goes through public APIs and hooks
   (`pilish-activity-phase-functions`, `pilish-extension-dialog-functions`,
-  `pilish-extension-status-functions`, `pilish-session-pending-dialogs`,
+  `pilish-extension-status-functions`, `pilish-session-identity-functions`,
+  `pilish-session-pending-dialogs`,
   `pilish-session-extension-status`, `pilish-start-session`). Needed Pilish
   changes belong in the Pilish fork (`../pilish`, branch `pi-orchestration`)
   with tests, not in workarounds here.
