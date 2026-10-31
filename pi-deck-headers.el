@@ -82,7 +82,7 @@ Point goes to the end, so Pilish follows new output again, as after `G'."
   "Return header line button LABEL running COMMAND, with HELP.
 OFF dims the button of a toggle that is off."
   (propertize label
-              'face (if off '(shadow header-line-highlight) 'header-line-highlight)
+              'face (if off '(pi-deck-header-dim header-line-highlight) 'header-line-highlight)
               'mouse-face 'mode-line-highlight 'pointer 'hand 'help-echo help
               'local-map (define-keymap
                         "<header-line> <mouse-1>" command
@@ -135,12 +135,11 @@ after TITLE stay visible however long the name and details are."
                            (pi-deck--header-button "[✕]" #'pi-deck-header-hide
                                                    "mouse-1: hide this pane; the agent keeps running")
                            " ")))
-      (string-replace
-       "%" "%%"
+      (pi-deck--escape-percent
        (concat (pi-deck--header-fit
                 (concat prefix " " (pi-deck-status-icon (pi-deck-agent-status agent)) " "
                         (propertize (pi-deck-agent-name agent) 'face 'bold)
-                        (mapconcat (lambda (detail) (propertize (concat " · " detail) 'face 'shadow))
+                        (mapconcat (lambda (detail) (propertize (concat " · " detail) 'face 'pi-deck-header-dim))
                                    (pi-deck--header-details agent) ""))
                 (string-width buttons))
                (propertize " " 'display `(space :align-to (- right ,(string-width buttons))))

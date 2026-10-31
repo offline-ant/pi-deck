@@ -292,7 +292,7 @@ SHORT leaves out the status names: \"◉ 2 · ● 1\"."
                                      (format " %d %s" (cdr cell) (car cell)))
                                    'face (pi-deck-status-face (car cell)))))
              (or summary (pi-deck-summary))
-             (propertize " · " 'face 'shadow)))
+             (propertize " · " 'face 'pi-deck-header-dim)))
 
 (defvar-keymap pi-deck-sidebar--summary-map
   :doc "Header line bindings of the sidebar's status summary."
@@ -309,12 +309,11 @@ The summary leaves out status names when they would not fit."
                            " "))
          (room (- (window-total-width) (string-width items) 3))
          (status (cond ((null summary)
-                        (propertize (if (pi-deck-agents) "all idle" "no agents") 'face 'shadow))
+                        (propertize (if (pi-deck-agents) "all idle" "no agents") 'face 'pi-deck-header-dim))
                        ((<= (string-width (pi-deck-summary-string summary)) room)
                         (pi-deck-summary-string summary))
                        (t (pi-deck-summary-string summary t)))))
-    (string-replace
-     "%" "%%"
+    (pi-deck--escape-percent
      (concat " "
              (propertize status 'mouse-face 'mode-line-highlight 'pointer 'hand
                          'help-echo "mouse-1: next agent needing attention"

@@ -1124,6 +1124,11 @@ MARK is `shown' (highlighted: the frame shows it) or nil."
         (let ((header (pi-deck-pane-header)))
           (should (string-match-p "\\` ○ main · faux-model · 41%% .*\\[⤢\\] \\[✕\\] \\'"
                                   (substring-no-properties header)))
+          ;; Details are dim, including the escaped `%'.
+          (let ((detail (string-search "faux-model" header)))
+            (should (eq (get-text-property detail 'face header) 'pi-deck-header-dim))
+            (dolist (index (list (string-search "%%" header) (1+ (string-search "%%" header))))
+              (should (eq (get-text-property index 'face header) 'pi-deck-header-dim))))
           (let ((zoom (string-search "[⤢]" header))
                 (close (string-search "[✕]" header)))
             (should (eq (keymap-lookup (get-text-property zoom 'local-map header)
@@ -1154,7 +1159,7 @@ MARK is `shown' (highlighted: the frame shows it) or nil."
             (should (eq (keymap-lookup (get-text-property toggle 'local-map header)
                                        "<header-line> <mouse-1>")
                         #'pi-deck-header-jump-to-answer))
-            (should (memq 'shadow (ensure-list (get-text-property toggle 'face header))))
+            (should (memq 'pi-deck-header-dim (ensure-list (get-text-property toggle 'face header))))
             (switch-to-buffer chat)
             (unwind-protect
                 (progn

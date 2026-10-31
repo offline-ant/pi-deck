@@ -51,6 +51,23 @@
 (defface pi-deck-unknown '((t :inherit shadow))
   "Face for agents whose state is unknown."
   :group 'pi-deck)
+(defface pi-deck-header-dim '((t :inherit shadow))
+  "Face for dim text in pi-deck header lines.
+It covers pane title bar details and switched-off buttons and the
+sidebar header's separators.  Header lines usually have the mode line's
+background, on which some themes' `shadow' is hard to read."
+  :group 'pi-deck)
+
+(defun pi-deck--escape-percent (string)
+  "Return STRING with every `%' doubled, keeping its text properties.
+The result shows as STRING in a mode or header line."
+  (let ((parts nil) (start 0))
+    (while-let ((index (string-search "%" string start)))
+      (push (substring string start (1+ index)) parts)
+      (push (substring string index (1+ index)) parts)
+      (setq start (1+ index)))
+    (push (substring string start) parts)
+    (apply #'concat (nreverse parts))))
 
 (defconst pi-deck-statuses '(blocked done working idle unknown)
   "Attention statuses, most urgent first.")
